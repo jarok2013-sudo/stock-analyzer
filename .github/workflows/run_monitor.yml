@@ -2,8 +2,8 @@ name: Automatyczny Monitor Giełdowy
 
 on:
   schedule:
-    # Uruchamiaj co godzinę od poniedziałku do piątku (składnia CRON)
-    - cron: '0 * * * 1-5'
+    # Uruchamiaj co godzinę od poniedziałku do piątku w czasie trwania giełdy od 9 do 17 (składnia CRON)
+    - cron: '0 9-17 * * 1-5'
   workflow_dispatch: # Umożliwia ręczne uruchomienie z zakładki Actions na GitHubie
 
 jobs:
@@ -12,10 +12,10 @@ jobs:
 
     steps:
     - name: Pobranie kodu repozytorium
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Konfiguracja Pythona
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.10'
 
