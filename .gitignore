@@ -7,7 +7,12 @@ venv/
 # Ignoruj wszystko w katalogu
 *
 
-# Wyklucz z ignorowania tylko te pliki/foldery:
+# Odblokuj folder .github oraz jego zawartość:
+!.github/
+!.github/workflows/
+!.github/workflows/run_monitor.yml
+
+# Wyklucz z ignorowania tylko te pliki/foldery: 
 !.gitignore
 !monitor.py
 !portfolios/
