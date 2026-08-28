@@ -1,0 +1,14 @@
+.venv/
+.vscode/
+**/__pycache__/
+*.pyc
+venv/
+
+# Ignoruj wszystko w katalogu
+*
+
+# Wyklucz z ignorowania tylko te pliki/foldery:
+!.gitignore
+!monitor.py
+!portfolios/
+!portfolios/positions.json
