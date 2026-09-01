@@ -18,3 +18,7 @@ venv/
 !portfolios/
 !portfolios/positions.json
 !requirements.txt
+
+#raport
+!reports/
+!reports/pdf_generator.py
