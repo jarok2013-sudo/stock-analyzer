@@ -54,10 +54,10 @@ OUTPUT_PDF_DIR = Path("output/pdf")
 
 
 # -------------------------------------------------------------------------
-# DYNAMICZNA NUMERACJA STRON W STOPCE
+# UJEDNOLICONA KLASA NUMBEREDCANVAS (NAGŁÓWEK + DWULINIJKOWA STOPKA X z Y)
 # -------------------------------------------------------------------------
 class NumberedCanvas(canvas.Canvas):
-    """Canvas dodający stopkę z numeracją stron (np. Strona 1 z 3)."""
+    """Canvas dodający dynamiczny nagłówek oraz dwulinijkową stopkę z numeracją stron (Strona X z Y)."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -71,27 +71,55 @@ class NumberedCanvas(canvas.Canvas):
         num_pages = len(self._saved_page_states)
         for state in self._saved_page_states:
             self.__dict__.update(state)
-            self.draw_page_number(num_pages)
+            self.draw_page_decorations(num_pages)
             super().showPage()
         super().save()
 
-    def draw_page_number(self, page_count):
-        self.setFont(FONT_NAME, 8)
+    def draw_page_decorations(self, page_count):
+        self.saveState()
+
+        page_width, page_height = self._pagesize
+        margin = 20
+
+        # 1. NAGŁÓWEK (Po polsku)
+        self.setFont(FONT_NAME, 6.5)
+        self.setFillColor(colors.HexColor("#fe0808"))
+
+        header_line1 = "Uwaga: Gra w inwestowanie na własną odpowiedzialność — strata może zaboleć, gdy wygrasz po prostu podziel się!"
+        header_line2 = "Raport edukacyjny, nie stanowi porady. Kod skanera: https://github.com/jarok2013-sudo/stock-analyzer"
+
+        self.drawString(margin, page_height - 10, header_line1)
+        self.drawString(margin, page_height - 18, header_line2)
+
+        # Linia pod nagłówkiem
+        self.setStrokeColor(colors.HexColor("#30363d"))
+        self.setLineWidth(0.5)
+        self.line(margin, page_height - 24, page_width - margin, page_height - 24)
+
+        # 2. STOPKA (Po angielsku + Numeracja "Strona X z Y")
+        self.line(margin, 27, page_width - margin, 27)
+
+        self.setFont(FONT_NAME, 6)
         self.setFillColor(colors.HexColor("#8b949e"))
-        page_width = self._pagesize[0]
+
+        footer_line1 = "Disclaimer: For informational and educational purposes only. Not financial advice."
+        footer_line2 = "Investments carry risk of loss — if you win, share the gains; if you lose, it's on you — use at your own risk. Project code: https://github.com/jarok2013-sudo/stock-analyzer"
+        self.setFillColor(colors.HexColor("#fe0808"))
+        self.drawString(margin, 18, footer_line1)
+        self.drawString(margin, 8, footer_line2)
+
+        # Numeracja stron po prawej stronie
+        self.setFillColor(colors.HexColor("#8b949e"))
         page_text = f"Strona {self._pageNumber} z {page_count}"
-        self.drawRightString(page_width - 30, 20, page_text)
-        self.drawString(30, 20, "Raport Skanera Giełdowego | Wygenerowano automatycznie")
+        self.drawRightString(page_width - margin, 18, page_text)
+
+        self.restoreState()
 
 
 # =========================================================================
 # 1. RAPORT INDYWIDUALNY DLA JEDNEJ SPÓŁKI (2 STRONY + WYKRESY)
 # =========================================================================
 def generate_pdf_report(analysis, filename=None):
-
-
-    
-    
     """Generuje szczegółowy, 2-stronicowy raport PDF z wykresami dla wybranego waloru."""
     symbol = getattr(analysis, "symbol", "WALOR")
     info = getattr(analysis, "instrument_info", {}) or {}
@@ -106,7 +134,7 @@ def generate_pdf_report(analysis, filename=None):
         rightMargin=35,
         leftMargin=35,
         topMargin=30,
-        bottomMargin=30,
+        bottomMargin=35,
     )
     story = []
     styles = getSampleStyleSheet()
@@ -145,37 +173,35 @@ def generate_pdf_report(analysis, filename=None):
 
     # --- DANE Z YAHOO FINANCE & WYCENA ---
     if info:
-        # Wycena spółki i akcji
         mcap = info.get("marketCap") or (info.get("marketCap"))
         current_price = info.get("currentPrice") or (info.get("regularMarketPrice"))
-        #current_price=getattr(analysis, "price", 0.0)
         
         story.append(Paragraph("<b>WYCENA SPÓŁKI I WSKAŹNIKI FUNDAMENTALNE</b>", section_title))
         
         fund_data = [
             [
                 Paragraph(f"<b>Wartość spółki (MCap):</b> {fmt_num(mcap, currency)}", cell_style),
-                Paragraph(f"<b>Cena C/Z (Trailing P/E):</b> {fmt_num(info.get('trailingPE'))}", cell_style),
+                Paragraph(f"<b>Cena C/Z (Trailing P/E)<sup>1</sup>:</b> {fmt_num(info.get('trailingPE'))}", cell_style),
                 Paragraph(f"<b>Stopa dywidendy:</b> {fmt_num(info.get('dividendYield'), is_pct=True)}", cell_style)
             ],
             [
                 Paragraph(f"<b>Cena 1 akcji:</b> {fmt_num(current_price, currency)}", cell_style),
-                Paragraph(f"<b>Przyszłe C/Z (Forward P/E):</b> {fmt_num(info.get('forwardPE'))}", cell_style),
+                Paragraph(f"<b>Przyszłe C/Z (Forward P/E)<sup>1</sup>:</b> {fmt_num(info.get('forwardPE'))}", cell_style),
                 Paragraph(f"<b>Dzień dywidendy:</b> {fmt_date(info.get('exDividendDate'))}", cell_style)
             ],
             [
-                Paragraph(f"<b>Wskaźnik C/WK (P/B):</b> {fmt_num(info.get('priceToBook'))}", cell_style),
+                Paragraph(f"<b>Wskaźnik C/WK (P/B)<sup>2</sup>:</b> {fmt_num(info.get('priceToBook'))}", cell_style),
                 Paragraph(f"<b>EPS (Trailing / Fwd):</b> {fmt_num(info.get('trailingEps'))} / {fmt_num(info.get('forwardEps'))}", cell_style),
                 Paragraph(f"<b>Wskaźnik wypłaty:</b> {fmt_num(info.get('payoutRatio'), is_pct=True)}", cell_style)
             ],
             [
                 Paragraph(f"<b>Dług / Kapitał:</b> {fmt_num(info.get('debtToEquity'))}", cell_style),
-                Paragraph(f"<b>Rentowność aktywów (ROA):</b> {fmt_num(info.get('returnOnAssets'), is_pct=True)}", cell_style),
+                Paragraph(f"<b>Rentowność aktywów (ROA)<sup>3</sup>:</b> {fmt_num(info.get('returnOnAssets'), is_pct=True)}", cell_style),
                 Paragraph(f"<b>Marża zysku:</b> {fmt_num(info.get('profitMargins'), is_pct=True)}", cell_style)
             ],
             [
                 Paragraph(f"<b>Dług całkowity:</b> {fmt_num(info.get('totalDebt'), currency)}", cell_style),
-                Paragraph(f"<b>Rentowność kapitału (ROE):</b> {fmt_num(info.get('returnOnEquity'), is_pct=True)}", cell_style),
+                Paragraph(f"<b>Rentowność kapitału (ROE)<sup>4</sup>:</b> {fmt_num(info.get('returnOnEquity'), is_pct=True)}", cell_style),
                 Paragraph(f"<b>Data wyników:</b> {fmt_date(info.get('earningsDate'))}", cell_style)
             ]
         ]
@@ -197,7 +223,7 @@ def generate_pdf_report(analysis, filename=None):
         analyst_data = [
             [
                 Paragraph(f"<b>Rekomendacja:</b> {reco_key} ({info.get('numberOfAnalystOpinions', 0)} analityków)", cell_style),
-                Paragraph(f"<b>Beta (Zmienność):</b> {fmt_num(info.get('beta'))}", cell_style),
+                Paragraph(f"<b>Beta (Zmienność)<sup>5</sup>:</b> {fmt_num(info.get('beta'))}", cell_style),
                 Paragraph(f"<b>Średni wolumen:</b> {fmt_num(info.get('averageVolume'))}", cell_style)
             ],
             [
@@ -266,7 +292,7 @@ def generate_pdf_report(analysis, filename=None):
     for ema_name in ["ema20", "ema50", "ema200"]:
         ema_val = getattr(analysis, ema_name, None)
         if ema_val is not None:
-            levels.append({"price": ema_val, "label": f"{ema_name.upper()}", "detail": "Średnia", "type": "EMA"})
+            levels.append({"price": ema_val, "label": f"{ema_name.upper()}<sup>10</sup>", "detail": "Średnia", "type": "EMA"})
 
     levels.append({"price": price, "label": "AKTUALNA CENA", "detail": "Rynkowa", "type": "PRICE"})
 
@@ -315,8 +341,8 @@ def generate_pdf_report(analysis, filename=None):
         Paragraph("<b>PARAMETRY TRANSAKCJI</b>", cell_bold),
         Spacer(1, 2),
         Paragraph(f"<b>Sygnał:</b> {trade_signal}", cell_style),
-        Paragraph(f"<b>R/R Ratio:</b> {rr_str}", cell_style),
-        Paragraph(f"<b>Zmienność ATR:</b> {atr_str}", cell_style),
+        Paragraph(f"<b>R/R Ratio<sup>9</sup><:</b> {rr_str}", cell_style),
+        Paragraph(f"<b>Zmienność ATR<sup>8</sup>:</b> {atr_str}", cell_style),
         Paragraph(f"<b>Stop Loss:</b> {sl_val:.2f} {currency}" if sl_val else "<b>Stop Loss:</b> N/A", ParagraphStyle("SL", parent=cell_style, textColor=COLOR_RED)),
         Paragraph(f"<b>Take Profit:</b> {tp_val:.2f} {currency}" if tp_val else "<b>Take Profit:</b> N/A", ParagraphStyle("TP", parent=cell_style, textColor=COLOR_GREEN)),
     ]
@@ -332,9 +358,9 @@ def generate_pdf_report(analysis, filename=None):
 
     checklist_items = [
         (t_code in ("UP", "STRONG_UP"), f"Trend: {t_code} ({t_desc})"),
-        (ema20 is not None and price > ema20, f"Cena > EMA20 ({ema20:.2f})" if ema20 else "Brak EMA20"),
-        (macd is not None and macd_sig is not None and macd > macd_sig, "MACD > Signal (Byczy sygnał)"),
-        (rsi is not None and rsi < getattr(config, 'RSI_OVERBOUGHT', 70), f"RSI nieprzegrzany ({rsi:.1f})" if rsi else "Brak RSI"),
+        (ema20 is not None and price > ema20, f"Cena > EMA20<sup>10</sup> ({ema20:.2f})" if ema20 else "Brak EMA20"),
+        (macd is not None and macd_sig is not None and macd > macd_sig, "MACD<sup>7</sup> > Signal (Byczy sygnał)"),
+        (rsi is not None and rsi < getattr(config, 'RSI_OVERBOUGHT', 70), f"RSI<sup>6</sup> nieprzegrzany ({rsi:.1f})" if rsi else "Brak RSI"),
         (trade_rr is not None and trade_rr >= 2.0, f"Zysk/Ryzyko ok (RR = {rr_str})"),
     ]
 
@@ -404,7 +430,38 @@ def generate_pdf_report(analysis, filename=None):
     ]))
     story.append(scores_table)
 
-    doc.build(story, onFirstPage=draw_header_footer, onLaterPages=draw_header_footer, canvasmaker=NumberedCanvas)
+    # 2. Przykład przygotowania sekcji objaśnień (Legendy) na dole raportu
+    styles = getSampleStyleSheet()
+    styles["Normal"].fontName = FONT_NAME
+
+    # Styl dla indeksów i legendy
+    legend_style = ParagraphStyle(
+        'LegendText',
+        parent=styles['Normal'],
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#8b949e")
+)
+    legend_html = """
+    <b>Objaśnienia wskaźników:</b><br/>
+    <sup>1</sup><b>C/Z (P/E)</b>: Stosunek ceny do zysku. Niska wartość wskazuje na potencjalną taniość spółki.<br/>
+    Trailing P/E (Historyczne): Oparte na twardych danych z ostatnich 12 miesięcy.
+    Forward P/E (Przyszłe): Oparte na prognozach analityków. Jest to kluczowa miara biznesowa – jeśli Forward P/E jest niższe od Trailing P/E, rynek spodziewa się realnego wzrostu zysków w przyszłości
+    <sup>2</sup><b>C/WK (P/B)</b>: Stosunek ceny do wartości księgowej. Poziom &lt; 1.0 oznacza wycenę poniżej majątku.<br/>
+    <sup>3</sup><b>ROA</b>: Rentowność aktywów. Określa efektywność wykorzystania majątku.Idealnie > 5-10%<br/>
+    <sup>4</sup><b>ROE</b>: Rentowność kapitału własnego. Mierzy stopę zwrotu dla akjonariuszy.Idealnie > 10-15%.<br/>
+    <sup>5</sup><b>Beta</b>: Wskaźnik wrażliwości na ruchy rynku (&lt; 1.0 oznacza niższą zmienność).<br/>
+    <sup>6</sup><b>RSI</b>: Oscylator siły względnej (30 = wyprzedanie, 70 = wykupienie).<br/>
+    <sup>7</sup><b>MACD</b>: Wskaźnik impetu i kierunku trendu.<br/>
+    <sup>8</sup><b>ATR</b>: Średnia dzienna zmienność cenowa w PLN.<br/>
+    <sup>9</sup><b>R/R Ratio</b>: Stosunek zysku do ryzyka (wartość &gt; 2.0 oznacza atrakcyjny układ).<br/>
+    <sup>10</sup><b>EMA</b>: Wykładnicza średnia krocząca wyznaczająca dynamiczne wsparcia i opory.
+    """
+
+    legend_paragraph = Paragraph(legend_html, legend_style)
+    story.append(legend_paragraph)
+
+    doc.build(story, canvasmaker=NumberedCanvas)
     print(f" Wygenerowano PDF spółki: {target_path}")
 
 
@@ -421,14 +478,13 @@ def generate_summary_pdf_report(results: dict, portfolio_name: str = "default", 
     else:
         target_path = Path(filename)
 
-    # Marginesy dostosowane do nagłówka i stopki (topMargin=25, bottomMargin=30)
     doc = SimpleDocTemplate(
         str(target_path),
         pagesize=landscape(A4),
         leftMargin=20,
         rightMargin=20,
         topMargin=25,
-        bottomMargin=30,
+        bottomMargin=35,
     )
 
     styles = getSampleStyleSheet()
@@ -533,13 +589,13 @@ def generate_summary_pdf_report(results: dict, portfolio_name: str = "default", 
 
             row = [
                 Paragraph(item["ticker"], cell_bold),
-                Paragraph(item["name"][:12], cell_style),
+                Paragraph(str(item["name"])[:12], cell_style),
                 Paragraph(f"{item['price']:.2f}", cell_style),
                 Paragraph(f"{item['target_price']:.2f}" if item.get("target_price") else "-", cell_style),
                 Paragraph(chg_str, cell_style),
                 Paragraph(ytd_str, cell_style),
                 Paragraph(f"{item['pe_ratio']:.1f}" if item.get("pe_ratio") else "-", cell_style),
-                Paragraph(f"{item['div_yield']*100:.1f}%" if item.get("div_yield") else "0%", cell_style),
+                Paragraph(f"{item['div_yield']:.1f}%" if item.get("div_yield") else "0%", cell_style),
                 Paragraph(supp_str, cell_style),
                 Paragraph(res_str, cell_style),
                 Paragraph(f"<font color='#f85149'>{sl_str}</font>", cell_style),
@@ -570,54 +626,7 @@ def generate_summary_pdf_report(results: dict, portfolio_name: str = "default", 
         story.append(t)
         story.append(Spacer(1, 8))
 
-    # Generowanie dokumentu ze stopką i nagłówkiem na każdej stronie
-    doc.build(story, onFirstPage=draw_header_footer, onLaterPages=draw_header_footer)
+    doc.build(story, canvasmaker=NumberedCanvas)
     
     print(f" Wygenerowano zbiorczy PDF: {target_path}")
     return target_path
-
-
-
-def draw_header_footer(canvas, doc):
-    """Rysuje nagłówek i stopkę z klauzulą wyłączenia odpowiedzialności (A4 Landscape)."""
-    canvas.saveState()
-    
-    # Parametry strony A4 Landscape (szerokość: 841.89 pt, wysokość: 595.27 pt)
-    page_width, page_height = landscape(A4)
-    margin = 20
-    
-    # 1. NAGŁÓWEK (Po polsku)
-    canvas.setFont(FONT_NAME, 6.5)
-    canvas.setFillColor(colors.HexColor("#fe0808"))
-    
-    header_line = (
-        "Uwaga: Gra w inwestowanie na własną odpowiedzialność — strata może zaboleć, gdy wygrasz po prostu podziel się! "
-        "Raport edukacyjny, nie stanowi porady. Kod skanera: https://github.com/jarok2013-sudo/stock-analyzer"
-    )
-    canvas.drawString(margin, page_height - 12, header_line)
-    
-    # Linia pod nagłówkiem
-    canvas.setStrokeColor(colors.HexColor("#30363d"))
-    canvas.setLineWidth(0.5)
-    canvas.line(margin, page_height - 16, page_width - margin, page_height - 16)
-    
-    # 2. STOPKA (Po angielsku + Numeracja stron)
-    
-    canvas.line(margin, 27, page_width - margin, 27)
-    
-    footer_text = (
-        "Disclaimer: For informational and educational purposes only. Not financial advice. "
-        "Investments carry risk of loss — if you win, share the gains; if you lose, it's on you — use at your own risk.\n Project code: https://github.com/jarok2013-sudo/stock-analyzer"
-    )
-    #canvas.drawString(margin, 12, footer_text)
-    footer_line1="Disclaimer: For informational and educational purposes only. Not financial advice. " 
-    canvas.drawString(margin, 18, footer_line1)
-    footer_line2="Investments carry risk of loss — if you win, share the gains; if you lose, it's on you — use at your own risk. Project code: https://github.com/jarok2013-sudo/stock-analyzer"
-    canvas.drawString(margin, 8, footer_line2)
-    
-    # Numeracja stron po prawej stronie
-    canvas.setFillColor(colors.HexColor("#8b949e"))
-    page_num = f"Strona {doc.page}"
-    canvas.drawRightString(page_width - margin, 12, page_num)
-    
-    canvas.restoreState()
