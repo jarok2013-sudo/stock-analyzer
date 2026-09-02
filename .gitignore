@@ -32,3 +32,10 @@ venv/
 !scoring/
 !scoring/quality_score.py
 !scoring/trend.py
+!scoring/analyst_sentiment.py
+!scoring/fundamental_score.py
+
+#entry
+!signals/
+!signals/entry_score.py
+!signals/signal_generator.py

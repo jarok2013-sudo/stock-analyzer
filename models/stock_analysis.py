@@ -12,6 +12,9 @@ from database import save_instrument, should_update, _load_fundamentals_from_db
 from download import get_instrument_info
 from scoring.quality_score import calculate_quality_score
 from scoring.trend import get_trend
+from scoring.fundamantal_score import calculate_fundamental_score
+from scoring.analyst_sentiment import calculate_analyst_sentiment
+
 from signals.entry_score import calculate_entry_score
 from signals.signal_generator import SignalGenerator
 from signals.trade_levels import calculate_trade_levels
@@ -30,7 +33,7 @@ from utils.supports import (
     find_support_zones,
     rate_supports,
 )
-from utils import _bool_value
+from utils.func import _bool_value
 
 
 class StockAnalysis:
@@ -107,9 +110,9 @@ class StockAnalysis:
         self.resistance_distance = None
 
         # Ocena techniczna vs fundamentalna
-        self.technical_quality_score = 0
-        self.fundamental_score = 0
-        self.fundamental_details = []
+        # self.technical_quality_score = 0
+        # self.fundamental_score = 0
+        # self.fundamental_details = []
 
         # Wyniki punktowe łączne
         self.rating = ""
@@ -133,12 +136,21 @@ class StockAnalysis:
         self.pe_ratio = None
         self.roe = None
 
+        self.fundamental_score = 0
+        self.fundamental_reasons = []
+
+        self.analyst_sentiment_score = 0
+        self.analyst_sentiment_reasons = []
+
+        self.analyst_upside_pct = None
+        self.analyst_target_spread_pct = None
+
     def fetch_instrument_info(self):
         """Pobiera metadane o spółce."""
         try:
             self.instrument_info = get_instrument_info(self.symbol) or {}
-            if should_update(self.symbol):
-                save_instrument(self.instrument_info, symbol=self.symbol)
+            #if should_update(self.symbol):
+            save_instrument(self.instrument_info, symbol=self.symbol)
         except Exception:
             self.instrument_info = {
                 "longName": self.symbol,
@@ -265,77 +277,70 @@ class StockAnalysis:
             self.risk_reward,
         ) = calculate_trade_levels(self)
 
-    def _run_fundamental_analysis(self):
-        """Pobiera dane fundamentalne z bazy i wylicza Fundamental Score."""
-        data = _load_fundamentals_from_db(self.symbol)
+    def calculate_fundamental_score(self):
+        """Wylicza Fundamental Score 0-100."""
+        (
+            self.fundamental_score,
+            self.fundamental_reasons
+        ) = calculate_fundamental_score(self)
 
-        if not data:
-            return
+    # def calculate_fundamental_score(self):
+    #     """Pobiera dane fundamentalne z bazy i wylicza Fundamental Score."""
+    #     data = _load_fundamentals_from_db(self.symbol)
 
-        self.target_mean_price = data.get("targetMeanPrice")
-        self.recommendation_key = data.get("recommendationKey", "N/D")
-        self.dividend_yield = data.get("dividendYield")
-        self.pe_ratio = data.get("trailingPE")
-        self.roe = data.get("returnOnEquity")
+    #     if not data:
+    #         return
 
-        score = 0
-        self.fundamental_details = []
+    #     self.target_mean_price = data.get("targetMeanPrice")
+    #     self.recommendation_key = data.get("recommendationKey", "N/D")
+    #     self.dividend_yield = data.get("dividendYield")
+    #     self.pe_ratio = data.get("trailingPE")
+    #     self.roe = data.get("returnOnEquity")
 
-        # Ocena P/E
-        if self.pe_ratio and 0 < self.pe_ratio < 15:
-            score += 25
-            self.fundamental_details.append("Niska wycena P/E (<15)")
-        elif self.pe_ratio and self.pe_ratio < 25:
-            score += 15
-            self.fundamental_details.append("Umiarkowana wycena P/E (<25)")
+    #     score = 0
+    #     self.fundamental_details = []
 
-        # Ocena ROE
-        if self.roe and self.roe >= 0.15:
-            score += 25
-            self.fundamental_details.append("Wysoki ROE (>=15%)")
+    #     # Ocena P/E
+    #     if self.pe_ratio and 0 < self.pe_ratio < 15:
+    #         score += 25
+    #         self.fundamental_details.append("Niska wycena P/E (<15)")
+    #     elif self.pe_ratio and self.pe_ratio < 25:
+    #         score += 15
+    #         self.fundamental_details.append("Umiarkowana wycena P/E (<25)")
 
-        # Dywidenda
-        if self.dividend_yield and self.dividend_yield >= 0.03:
-            score += 25
-            div_pct = self.dividend_yield * 100 if self.dividend_yield < 1.0 else self.dividend_yield
-            self.fundamental_details.append(f"Atrakcyjna dywidenda ({div_pct:.1f}%)")
+    #     # Ocena ROE
+    #     if self.roe and self.roe >= 0.15:
+    #         score += 25
+    #         self.fundamental_details.append("Wysoki ROE (>=15%)")
 
-        # Rekomendacje
-        if str(self.recommendation_key).lower() in ["buy", "strong_buy"]:
-            score += 25
-            self.fundamental_details.append("Rekomendacja KUPUJ")
+    #     # Dywidenda
+    #     if self.dividend_yield and self.dividend_yield >= 0.03:
+    #         score += 25
+    #         div_pct = self.dividend_yield * 100 if self.dividend_yield < 1.0 else self.dividend_yield
+    #         self.fundamental_details.append(f"Atrakcyjna dywidenda ({div_pct:.1f}%)")
 
-        self.fundamental_score = score
+    #     # Rekomendacje
+    #     if str(self.recommendation_key).lower() in ["buy", "strong_buy"]:
+    #         score += 25
+    #         self.fundamental_details.append("Rekomendacja KUPUJ")
+
+    #     self.fundamental_score = score
+
+    def calculate_analyst_sentiment(self):
+        """Wylicza Analyst Sentiment Score 0-100."""
+        (
+            self.analyst_sentiment_score,
+            self.analyst_sentiment_reasons
+        ) = calculate_analyst_sentiment(self)
 
     def calculate_quality_score(self):
-        """Wylicza łączną punktację jakości spółki (Technika + Fundamenty)."""
-        # 1. Pobieramy punkty techniczne
-        tech_score, tech_reasons = calculate_quality_score(self)
-        self.technical_quality_score = tech_score
+        """Wylicza wyłącznie techniczny Quality Score 0–100."""
+        (
+            self.quality_score,
+            self.quality_reasons
+        ) = calculate_quality_score(self)
 
-        # 2. Jeśli mamy dane fundamentalne, łączymy wagi (50% Technika / 50% Fundamenty)
-        if self.fundamental_score > 0:
-            self.quality_score = int((self.technical_quality_score * 0.5) + (self.fundamental_score * 0.5))
-            
-            # Przeskalowanie uzasadnień technicznych (50% wagi)
-            scaled_reasons = []
-            for r in tech_reasons:
-                scaled_reasons.append({
-                    "points": int(round(r.get("points", 0) * 0.5)),
-                    "text": f"[Tech] {r.get('text', '')}"
-                })
-            
-            # Dodanie uzasadnień fundamentalnych (25 pkt w skali 100 = 12-13 pkt po skalowaniu)
-            for detail in self.fundamental_details:
-                scaled_reasons.append({
-                    "points": 12,
-                    "text": f"[Fund] {detail}"
-                })
-            
-            self.quality_reasons = scaled_reasons
-        else:
-            self.quality_score = self.technical_quality_score
-            self.quality_reasons = tech_reasons
+        #self.technical_quality_score = self.quality_score
 
     def calculate_entry_score(self):
         """Wylicza punktację momentu wejścia."""
@@ -429,7 +434,9 @@ class StockAnalysis:
         self.calculate_levels()
         
         # Prawidłowa kolejność: najpierw wczytanie fundamentów, potem łączny jakość
-        self._run_fundamental_analysis()
+        self.calculate_fundamental_score()
+        self.calculate_analyst_sentiment()
+
         self.calculate_quality_score()
         
         self.calculate_trade_levels()
