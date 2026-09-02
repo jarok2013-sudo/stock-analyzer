@@ -299,7 +299,7 @@ def generate_pdf_report(analysis, filename=None):
 
     target_p = getattr(analysis, "target_mean_price", None)
     if target_p is not None:
-        dist_target = ((target_p - price) / price) * 100
+        dist_target = ((target_p - price) / price) * 100 if price else 0
         levels.append({"price": target_p, "label": "🎯 TARGET ANALITYKÓW", "detail": f"Potencjał: {dist_target:+.2f}%", "type": "TARGET"})
 
     levels.sort(key=lambda x: x["price"], reverse=True)
@@ -314,7 +314,12 @@ def generate_pdf_report(analysis, filename=None):
                 Paragraph(f"<b>{lvl['detail']}</b>", ParagraphStyle("P", parent=cell_bold, textColor=COLOR_PRICE)),
             ])
         else:
-            col = COLOR_RED if lvl["type"] in ["RES", "SL"] else (COLOR_GREEN if lvl["type"] in ["SUP", "TP"] else COLOR_TARGET) if lvl["type"] == "TARGET" else COLOR_PRIMARY
+            col = (
+    COLOR_RED if lvl["type"] in ["RES", "SL"]
+    else COLOR_GREEN if lvl["type"] in ["SUP", "TP"]
+    else COLOR_TARGET if lvl["type"] == "TARGET"
+    else COLOR_PRIMARY
+)
             ladder_table_data.append([
                 Paragraph(lvl["label"], ParagraphStyle("L", parent=cell_bold, textColor=col)),
                 Paragraph(p_str, cell_bold),
