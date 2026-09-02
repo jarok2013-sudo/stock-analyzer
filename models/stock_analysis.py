@@ -7,9 +7,8 @@ if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
 import pandas as pd
-
 import config
-from database import save_instrument,should_update,_load_fundamentals_from_db
+from database import save_instrument, should_update, _load_fundamentals_from_db
 from download import get_instrument_info
 from scoring.quality_score import calculate_quality_score
 from scoring.trend import get_trend
@@ -31,6 +30,7 @@ from utils.supports import (
     find_support_zones,
     rate_supports,
 )
+from utils import _bool_value
 
 
 class StockAnalysis:
@@ -39,7 +39,7 @@ class StockAnalysis:
         self.symbol = symbol
         self.df = df
 
-        self.price = float(df.iloc[-1]["close"]) if not df.empty else 0.0
+        self.price = float(df.iloc[-1]["close"]) if (df is not None and not df.empty) else 0.0
         self.prev_price = None
 
         self.instrument_info = {}
@@ -65,20 +65,53 @@ class StockAnalysis:
         self.histogram_rising = False
         self.atr = None
         self.vol_ratio = 1.0
+        self.adx = None
 
-        # Poziomy geometrii rynku
+        # Stochastic
+        self.stoch_k = None
+        self.stoch_d = None
+        self.prev_stoch_k = None
+        self.prev_stoch_d = None
+
+        # Wstęgi Bollingera
+        self.bb_lower = None
+        self.bb_middle = None
+        self.bb_upper = None
+        self.bb_bandwidth = None
+        self.bb_squeeze = False
+
+        # OBV
+        self.obv = None
+        self.obv_rising = False
+        self.obv_bullish_div = False
+        self.obv_bearish_div = False
+
+        # Geometria rynku / Szczyty
+        self.high_20d = None
+        self.low_20d = None
+        self.ath = None
+        self.dist_to_ath_pct = None
+        self.is_near_ath = False
+
         self.minima = []
         self.maxima = []
         self.minmax = []
         self.support_zones = []
         self.resistance_zones = []
+        self.rated_supports = []
+        self.rated_resistances = []
 
         self.nearest_support = None
         self.nearest_resistance = None
         self.support_distance = None
         self.resistance_distance = None
 
-        # Wyniki punktowe
+        # Ocena techniczna vs fundamentalna
+        self.technical_quality_score = 0
+        self.fundamental_score = 0
+        self.fundamental_details = []
+
+        # Wyniki punktowe łączne
         self.rating = ""
         self.quality_score = 0
         self.quality_reasons = []
@@ -93,26 +126,19 @@ class StockAnalysis:
         self.risk_reward = None
         self.confidence = 0
 
-        # Pola fundamentalne
-        self.fundamental_score = 0
-        self.fundamental_details = []
+        # Pola fundamentalne z bazy danych
         self.target_mean_price = None
         self.recommendation_key = "N/D"
         self.dividend_yield = None
         self.pe_ratio = None
         self.roe = None
 
-        self.stoch_k = None
-        self.stoch_d = None
-        self.prev_stoch_k = None
-        self.prev_stoch_d = None
-
     def fetch_instrument_info(self):
         """Pobiera metadane o spółce."""
         try:
             self.instrument_info = get_instrument_info(self.symbol) or {}
-            if should_update(self.symbol):  
-                save_instrument(self.instrument_info,symbol=self.symbol)
+            if should_update(self.symbol):
+                save_instrument(self.instrument_info, symbol=self.symbol)
         except Exception:
             self.instrument_info = {
                 "longName": self.symbol,
@@ -133,7 +159,6 @@ class StockAnalysis:
 
         last_row = self.df.iloc[-1]
         prev_row = self.df.iloc[-2] if len(self.df) > 1 else last_row
-
 
         self.prev_price = (
             float(prev_row["close"])
@@ -169,146 +194,53 @@ class StockAnalysis:
 
         # 2. RSI
         rsi_val = last_row.get("RSI")
-        self.rsi = (
-            float(rsi_val) if rsi_val is not None and not pd.isna(rsi_val) else 50.0
-        )
+        self.rsi = float(rsi_val) if rsi_val is not None and not pd.isna(rsi_val) else None
 
         # 3. MACD
-        self.macd = (
-            float(last_row.get("MACD", 0.0))
-            if not pd.isna(last_row.get("MACD"))
-            else 0.0
-        )
-        self.macd_signal = (
-            float(last_row.get("MACD_signal", 0.0))
-            if not pd.isna(last_row.get("MACD_signal"))
-            else 0.0
-        )
-        self.histogram = (
-            float(last_row.get("MACD_hist", 0.0))
-            if not pd.isna(last_row.get("MACD_hist"))
-            else 0.0
-        )
+        self.macd = float(last_row.get("MACD", 0.0)) if not pd.isna(last_row.get("MACD")) else None
+        self.macd_signal = float(last_row.get("MACD_signal", 0.0)) if not pd.isna(last_row.get("MACD_signal")) else None
+        self.histogram = float(last_row.get("MACD_hist", 0.0)) if not pd.isna(last_row.get("MACD_hist")) else None
 
         prev_hist = prev_row.get("MACD_hist")
-        self.prev_histogram = (
-            float(prev_hist)
-            if prev_hist is not None and not pd.isna(prev_hist)
-            else 0.0
-        )
+        self.prev_histogram = float(prev_hist) if prev_hist is not None and not pd.isna(prev_hist) else 0.0
 
         self.macd_above_signal = self.macd > self.macd_signal
         self.histogram_rising = self.histogram > self.prev_histogram
 
-        # 4. ATR, Vol Ratio, ADX, Stoch, BB
+        # 4. ATR, Vol Ratio, ADX
+        self.atr = float(last_row["ATR"]) if "ATR" in last_row and not pd.isna(last_row["ATR"]) else None
+        self.vol_ratio = float(last_row["vol_ratio"]) if "vol_ratio" in last_row and not pd.isna(last_row["vol_ratio"]) else 1.0
+        self.adx = float(last_row["ADX"]) if "ADX" in last_row and not pd.isna(last_row["ADX"]) else None
 
-        self.atr = (
-            float(last_row["ATR"])
-            if "ATR" in last_row and not pd.isna(last_row["ATR"])
-            else None
-        )
+        # 5. STOCHASTIC
+        self.stoch_k = float(last_row["STOCH_k"]) if "STOCH_k" in last_row and not pd.isna(last_row["STOCH_k"]) else None
+        self.stoch_d = float(last_row["STOCH_d"]) if "STOCH_d" in last_row and not pd.isna(last_row["STOCH_d"]) else None
+        self.prev_stoch_k = float(prev_row["STOCH_k"]) if "STOCH_k" in prev_row and not pd.isna(prev_row["STOCH_k"]) else None
+        self.prev_stoch_d = float(prev_row["STOCH_d"]) if "STOCH_d" in prev_row and not pd.isna(prev_row["STOCH_d"]) else None
 
-        self.vol_ratio = (
-            float(last_row["vol_ratio"])
-            if "vol_ratio" in last_row and not pd.isna(last_row["vol_ratio"])
-            else 1.0
-        )
+        # 6. BOLLINGER BANDS
+        self.bb_lower = float(last_row["bb_lower"]) if "bb_lower" in last_row and not pd.isna(last_row["bb_lower"]) else None
+        self.bb_upper = float(last_row["bb_upper"]) if "bb_upper" in last_row and not pd.isna(last_row["bb_upper"]) else None
+        self.bb_middle = float(last_row["bb_middle"]) if "bb_middle" in last_row and not pd.isna(last_row["bb_middle"]) else None
+        self.bb_bandwidth = float(last_row["bb_bandwidth"]) if "bb_bandwidth" in last_row and not pd.isna(last_row["bb_bandwidth"]) else None
+        #self.bb_squeeze = bool(last_row.get("bb_squeeze", False))
+        self.bb_squeeze = _bool_value(last_row.get("bb_squeeze", False), default=False)
 
-        self.adx = (
-            float(last_row["ADX"])
-            if "ADX" in last_row and not pd.isna(last_row["ADX"])
-            else None
-        )
+        # 7. OBV
+        self.obv = float(last_row["OBV"]) if "OBV" in last_row and not pd.isna(last_row["OBV"]) else None
+        self.obv_rising = _bool_value(last_row.get("obv_rising", False), default=False)
+        self.obv_bullish_div = _bool_value(last_row.get("obv_bullish_div", False), default=False)
+        self.obv_bearish_div = _bool_value(last_row.get("obv_bearish_div", False), default=False)
 
-
-        # -------------------------------------------------------------
-        # STOCHASTIC
-        # -------------------------------------------------------------
-
-        self.stoch_k = (
-            float(last_row["STOCH_k"])
-            if "STOCH_k" in last_row and not pd.isna(last_row["STOCH_k"])
-            else None
-        )
-
-        self.stoch_d = (
-            float(last_row["STOCH_d"])
-            if "STOCH_d" in last_row and not pd.isna(last_row["STOCH_d"])
-            else None
-        )
-
-        self.prev_stoch_k = (
-            float(prev_row["STOCH_k"])
-            if "STOCH_k" in prev_row and not pd.isna(prev_row["STOCH_k"])
-            else None
-        )
-
-        self.prev_stoch_d = (
-            float(prev_row["STOCH_d"])
-            if "STOCH_d" in prev_row and not pd.isna(prev_row["STOCH_d"])
-            else None
-        )
-
-        self.bb_lower = (
-            float(last_row["bb_lower"])
-            if "bb_lower" in last_row and not pd.isna(last_row["bb_lower"])
-            else None
-        )
-        self.bb_upper = (
-            float(last_row["bb_upper"])
-            if "bb_upper" in last_row and not pd.isna(last_row["bb_upper"])
-            else None
-        )
-        self.bb_middle = (
-            float(last_row["bb_middle"])
-            if "bb_middle" in last_row and not pd.isna(last_row["bb_middle"])
-            else None
-        )
-        self.bb_bandwidth = (
-            float(last_row["bb_bandwidth"])
-            if "bb_bandwidth" in last_row and not pd.isna(last_row["bb_bandwidth"])
-            else None
-        )
-        self.bb_squeeze = bool(last_row.get("bb_squeeze", False))
-
-        # 5. OBV
-        self.obv = (
-            float(last_row["OBV"])
-            if "OBV" in last_row and not pd.isna(last_row["OBV"])
-            else None
-        )
-        self.obv_rising = bool(last_row.get("obv_rising", False))
-        self.obv_bullish_div = bool(last_row.get("obv_bullish_div", False))
-        self.obv_bearish_div = bool(last_row.get("obv_bearish_div", False))
-
-        # 6. Geometria / ATH
-        self.high_20d = (
-            float(last_row["rolling_high_20"])
-            if "rolling_high_20" in last_row and not pd.isna(last_row["rolling_high_20"])
-            else None
-        )
-        self.low_20d = (
-            float(last_row["rolling_low_20"])
-            if "rolling_low_20" in last_row and not pd.isna(last_row["rolling_low_20"])
-            else None
-        )
-
-        self.ath = (
-            float(last_row["ATH"])
-            if "ATH" in last_row and not pd.isna(last_row["ATH"])
-            else None
-        )
-        self.dist_to_ath_pct = (
-            float(last_row["dist_to_ath_pct"])
-            if "dist_to_ath_pct" in last_row and not pd.isna(last_row["dist_to_ath_pct"])
-            else None
-        )
-        self.is_near_ath = bool(last_row.get("is_near_ath", False))
+        # 8. Geometria / ATH
+        self.high_20d = float(last_row["rolling_high_20"]) if "rolling_high_20" in last_row and not pd.isna(last_row["rolling_high_20"]) else None
+        self.low_20d = float(last_row["rolling_low_20"]) if "rolling_low_20" in last_row and not pd.isna(last_row["rolling_low_20"]) else None
+        self.ath = float(last_row["ATH"]) if "ATH" in last_row and not pd.isna(last_row["ATH"]) else None
+        self.dist_to_ath_pct = float(last_row["dist_to_ath_pct"]) if "dist_to_ath_pct" in last_row and not pd.isna(last_row["dist_to_ath_pct"]) else None
+        self.is_near_ath = _bool_value(last_row.get("is_near_ath", False), default=False)
 
     def calculate_levels(self):
         """Wyznacza lokalne ekstrema oraz strefy wsparć i oporów."""
-        # self.minima = find_local_minima(self.df)
-        # self.maxima = find_local_maxima(self.df)
         extrema = find_local_minmax_vectorized(self.df, window_size=2)
         self.minima = [e for e in extrema if e["type"] == "minimum"]
         self.maxima = [e for e in extrema if e["type"] == "maximum"]
@@ -333,9 +265,77 @@ class StockAnalysis:
             self.risk_reward,
         ) = calculate_trade_levels(self)
 
+    def _run_fundamental_analysis(self):
+        """Pobiera dane fundamentalne z bazy i wylicza Fundamental Score."""
+        data = _load_fundamentals_from_db(self.symbol)
+
+        if not data:
+            return
+
+        self.target_mean_price = data.get("targetMeanPrice")
+        self.recommendation_key = data.get("recommendationKey", "N/D")
+        self.dividend_yield = data.get("dividendYield")
+        self.pe_ratio = data.get("trailingPE")
+        self.roe = data.get("returnOnEquity")
+
+        score = 0
+        self.fundamental_details = []
+
+        # Ocena P/E
+        if self.pe_ratio and 0 < self.pe_ratio < 15:
+            score += 25
+            self.fundamental_details.append("Niska wycena P/E (<15)")
+        elif self.pe_ratio and self.pe_ratio < 25:
+            score += 15
+            self.fundamental_details.append("Umiarkowana wycena P/E (<25)")
+
+        # Ocena ROE
+        if self.roe and self.roe >= 0.15:
+            score += 25
+            self.fundamental_details.append("Wysoki ROE (>=15%)")
+
+        # Dywidenda
+        if self.dividend_yield and self.dividend_yield >= 0.03:
+            score += 25
+            div_pct = self.dividend_yield * 100 if self.dividend_yield < 1.0 else self.dividend_yield
+            self.fundamental_details.append(f"Atrakcyjna dywidenda ({div_pct:.1f}%)")
+
+        # Rekomendacje
+        if str(self.recommendation_key).lower() in ["buy", "strong_buy"]:
+            score += 25
+            self.fundamental_details.append("Rekomendacja KUPUJ")
+
+        self.fundamental_score = score
+
     def calculate_quality_score(self):
-        """Wylicza punktację jakości spółki."""
-        self.quality_score, self.quality_reasons = calculate_quality_score(self)
+        """Wylicza łączną punktację jakości spółki (Technika + Fundamenty)."""
+        # 1. Pobieramy punkty techniczne
+        tech_score, tech_reasons = calculate_quality_score(self)
+        self.technical_quality_score = tech_score
+
+        # 2. Jeśli mamy dane fundamentalne, łączymy wagi (50% Technika / 50% Fundamenty)
+        if self.fundamental_score > 0:
+            self.quality_score = int((self.technical_quality_score * 0.5) + (self.fundamental_score * 0.5))
+            
+            # Przeskalowanie uzasadnień technicznych (50% wagi)
+            scaled_reasons = []
+            for r in tech_reasons:
+                scaled_reasons.append({
+                    "points": int(round(r.get("points", 0) * 0.5)),
+                    "text": f"[Tech] {r.get('text', '')}"
+                })
+            
+            # Dodanie uzasadnień fundamentalnych (25 pkt w skali 100 = 12-13 pkt po skalowaniu)
+            for detail in self.fundamental_details:
+                scaled_reasons.append({
+                    "points": 12,
+                    "text": f"[Fund] {detail}"
+                })
+            
+            self.quality_reasons = scaled_reasons
+        else:
+            self.quality_score = self.technical_quality_score
+            self.quality_reasons = tech_reasons
 
     def calculate_entry_score(self):
         """Wylicza punktację momentu wejścia."""
@@ -373,9 +373,7 @@ class StockAnalysis:
             f"Najbliższe wsparcie:  {supp.get('price') if supp else 'Brak'} (Liczba"
             f" testów: {touches_cnt})"
         )
-        print(
-            f"Najbliższy opór:     {res.get('price') if res else 'Brak'}"
-        )
+        print(f"Najbliższy opór:     {res.get('price') if res else 'Brak'}")
 
         print("\n--- POZIOMY TRANSAKCYJNE ---")
         print(f"Stop Loss (SL):       {getattr(self, 'stop_loss', 'Brak')}")
@@ -383,10 +381,9 @@ class StockAnalysis:
         print(f"Risk / Reward (R/R):  {getattr(self, 'risk_reward', 'Brak')}")
         print("=" * 50)
 
-    #debug
     def check_nulls(self):
         """Wypisuje podsumowanie wszystkich pól i kolumn, które mają wartość None / NaN."""
-        print(f"\n" + "=" * 50)
+        print("\n" + "=" * 50)
         print(f"🔍 AUDYT BRAKÓW DANYCH (NULL / NaN): {self.symbol}")
         print("=" * 50)
 
@@ -399,13 +396,11 @@ class StockAnalysis:
                 continue  # Ramkę df sprawdzamy osobno poniżej
 
             if val is None or (isinstance(val, float) and pd.isna(val)):
-                print(f"  ❌ {attr:<20} : {val}")
+                print(f"  ❌ {attr:<25} : {val}")
                 found_nulls = True
             elif isinstance(val, dict):
                 for dict_k, dict_v in val.items():
-                    if dict_v is None or (
-                        isinstance(dict_v, float) and pd.isna(dict_v)
-                    ):
+                    if dict_v is None or (isinstance(dict_v, float) and pd.isna(dict_v)):
                         print(f"  ❌ {attr}['{dict_k}'] : {dict_v}")
                         found_nulls = True
 
@@ -420,70 +415,23 @@ class StockAnalysis:
             print("\n📌 Kolumny w ramce df z wartościami NaN:")
             if not missing_cols.empty:
                 for col_name, count in missing_cols.items():
-                    print(
-                        f"  ⚠️ {col_name:<20} : {count} pustych wierszy /"
-                        f" {len(self.df)}"
-                    )
+                    print(f"  ⚠️ {col_name:<20} : {count} pustych wierszy / {len(self.df)}")
             else:
                 print("  ✅ Ramka danych df nie posiada braków (NaN).")
 
         print("=" * 50 + "\n")
 
-
-    def _run_fundamental_analysis(self):
-        # Pobranie danych z bazy SQLite lub fallback
-        data = _load_fundamentals_from_db(self.symbol)
-        
-        if not data:
-            return
-
-        self.target_mean_price = data.get("targetMeanPrice")
-        self.recommendation_key = data.get("recommendationKey", "N/D")
-        self.dividend_yield = data.get("dividendYield")
-        self.pe_ratio = data.get("trailingPE")
-        self.roe = data.get("returnOnEquity")
-
-        # Obliczenie Fundamendal Quality Score
-        score = 0
-        
-        # Ocena P/E
-        if self.pe_ratio and 0 < self.pe_ratio < 15:
-            score += 25
-            self.fundamental_details.append("Niska wycena P/E (<15)")
-        elif self.pe_ratio and self.pe_ratio < 25:
-            score += 15
-
-        # Ocena ROE
-        if self.roe and self.roe >= 0.15:
-            score += 25
-            self.fundamental_details.append("Wysoki ROE (>=15%)")
-
-        # Dywidenda
-        if self.dividend_yield and self.dividend_yield >= 0.03:
-            score += 25
-            self.fundamental_details.append(f"Dywidenda {self.dividend_yield*100:.1f}%")
-
-        # Rekomendacje
-        if str(self.recommendation_key).lower() in ["buy", "strong_buy"]:
-            score += 25
-            self.fundamental_details.append("Rekomendacja KUPUJ")
-
-        self.fundamental_score = score
-        
-        # Aktualizacja ogólnego Quality Score (np. 50% technika, 50% fundamenty)
-        tech_score = getattr(self, "quality_score", 0)
-        self.quality_score = int((tech_score * 0.5) + (self.fundamental_score * 0.5))
-
-    
-
     def run(self):
-        """Główna metoda wykonująca pełną analizę w odpowiedniej kolejności."""
+        """Główna metoda wykonująca pełną analizę w odpowiedniej sekwencji."""
         self.fetch_instrument_info()
         self.calculate_trend()
         self.calculate_indicators()
         self.calculate_levels()
-        self.calculate_quality_score()
+        
+        # Prawidłowa kolejność: najpierw wczytanie fundamentów, potem łączny jakość
         self._run_fundamental_analysis()
+        self.calculate_quality_score()
+        
         self.calculate_trade_levels()
         self.calculate_entry_score()
         self.calculate_signal()
