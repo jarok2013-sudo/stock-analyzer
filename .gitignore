@@ -22,3 +22,8 @@ venv/
 #raport
 !reports/
 !reports/pdf_generator.py
+
+#scoring
+!scoring/
+!scoring/quality_score.py
+!scoring/trend.py
