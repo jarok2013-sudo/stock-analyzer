@@ -40,6 +40,7 @@ class StockAnalysis:
         self.df = df
 
         self.price = float(df.iloc[-1]["close"]) if not df.empty else 0.0
+        self.prev_price = None
 
         self.instrument_info = {}
         self.trend = None
@@ -101,6 +102,11 @@ class StockAnalysis:
         self.pe_ratio = None
         self.roe = None
 
+        self.stoch_k = None
+        self.stoch_d = None
+        self.prev_stoch_k = None
+        self.prev_stoch_d = None
+
     def fetch_instrument_info(self):
         """Pobiera metadane o spółce."""
         try:
@@ -127,6 +133,13 @@ class StockAnalysis:
 
         last_row = self.df.iloc[-1]
         prev_row = self.df.iloc[-2] if len(self.df) > 1 else last_row
+
+
+        self.prev_price = (
+            float(prev_row["close"])
+            if "close" in prev_row and not pd.isna(prev_row["close"])
+            else None
+        )
 
         # 1. EMA
         for ema_name in ["EMA20", "EMA50", "EMA200"]:
@@ -188,30 +201,51 @@ class StockAnalysis:
         self.histogram_rising = self.histogram > self.prev_histogram
 
         # 4. ATR, Vol Ratio, ADX, Stoch, BB
+
         self.atr = (
             float(last_row["ATR"])
             if "ATR" in last_row and not pd.isna(last_row["ATR"])
             else None
         )
+
         self.vol_ratio = (
             float(last_row["vol_ratio"])
             if "vol_ratio" in last_row and not pd.isna(last_row["vol_ratio"])
             else 1.0
         )
+
         self.adx = (
             float(last_row["ADX"])
             if "ADX" in last_row and not pd.isna(last_row["ADX"])
             else None
         )
 
+
+        # -------------------------------------------------------------
+        # STOCHASTIC
+        # -------------------------------------------------------------
+
         self.stoch_k = (
             float(last_row["STOCH_k"])
             if "STOCH_k" in last_row and not pd.isna(last_row["STOCH_k"])
             else None
         )
+
         self.stoch_d = (
             float(last_row["STOCH_d"])
             if "STOCH_d" in last_row and not pd.isna(last_row["STOCH_d"])
+            else None
+        )
+
+        self.prev_stoch_k = (
+            float(prev_row["STOCH_k"])
+            if "STOCH_k" in prev_row and not pd.isna(prev_row["STOCH_k"])
+            else None
+        )
+
+        self.prev_stoch_d = (
+            float(prev_row["STOCH_d"])
+            if "STOCH_d" in prev_row and not pd.isna(prev_row["STOCH_d"])
             else None
         )
 

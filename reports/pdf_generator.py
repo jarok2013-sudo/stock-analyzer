@@ -126,7 +126,8 @@ def generate_pdf_report(analysis, filename=None):
     currency = info.get("currency", "PLN")
 
     OUTPUT_PDF_DIR.mkdir(parents=True, exist_ok=True)
-    target_path = OUTPUT_PDF_DIR / f"raport_{symbol}.pdf" if filename is None else Path(filename)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    target_path = OUTPUT_PDF_DIR / f"raport_{symbol}_{timestamp}.pdf" if filename is None else Path(filename)
 
     doc = SimpleDocTemplate(
         str(target_path),
@@ -474,7 +475,8 @@ def generate_summary_pdf_report(results: dict, portfolio_name: str = "default", 
 
     if filename is None:
         clean_name = Path(portfolio_name).stem.lower()
-        target_path = OUTPUT_PDF_DIR / f"raport_zbiorczy_{clean_name}.pdf"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target_path = OUTPUT_PDF_DIR / f"raport_zbiorczy_{clean_name}_{timestamp}.pdf"
     else:
         target_path = Path(filename)
 
