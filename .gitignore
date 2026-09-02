@@ -14,6 +14,11 @@ venv/
 
 # Wyklucz z ignorowania tylko te pliki/foldery: 
 !.gitignore
+
+!models/
+!models/stock_analysis.py
+
+#monitorowanie zakupionych pozycji
 !monitor.py
 !portfolios/
 !portfolios/positions.json
