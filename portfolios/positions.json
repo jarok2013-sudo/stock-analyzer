@@ -4,5 +4,11 @@
     "buy_price": 148.64,
     "stop_loss": 143.50,
     "take_profit": 156.67
+  },
+  {
+    "symbol": "PZU.WA",
+    "buy_price": 74.20,
+    "stop_loss": 71.08,
+    "take_profit": 80.44
   }
 ]
