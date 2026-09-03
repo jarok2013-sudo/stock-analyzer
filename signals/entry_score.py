@@ -29,34 +29,86 @@ import sys
 import pandas as pd
 from pathlib import Path
 
-# Dodajemy katalog nadrzędny (../) do ścieżek wyszukiwania modułów Pythona
+# Dodaj katalog nadrzędny do ścieżki importów
 parent_dir = Path(__file__).resolve().parent.parent
+
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
-import config  # Teraz 'config' jest dostępny jako obiekt!
+import config
 
+
+# ============================================================
+# POMOCNICZE
+# ============================================================
 
 def add_reason(reasons, category, points, text):
     reasons.append({
         "category": category,
         "points": points,
-        "text": text
+        "text": text,
     })
 
 
+def _safe_number(value, default=None):
+    """
+    Bezpiecznie konwertuje wartość na float.
+    Na NaN zwraca default.
+    """
+    if value is None:
+        return default
+
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+
+    if pd.isna(value):
+        return default
+
+    return value
+
+
+# ============================================================
+# GŁÓWNY ENTRY SCORE
+# ============================================================
+
 def calculate_entry_score(analysis):
+    """
+    Entry Score 0-100.
+
+    Składniki:
+
+        R/R              35 pkt
+        Proximity        25 pkt
+        Trigger          30 pkt
+        Volume           10 pkt
+        -----------------------
+                         100 pkt
+    """
+
     score = 0
     reasons = []
 
-    if getattr(analysis, "risk_reward", None) is None:
+    # --------------------------------------------------------
+    # R/R
+    # --------------------------------------------------------
+
+    rr = getattr(analysis, "risk_reward", None)
+
+    if rr is None or pd.isna(rr):
         add_reason(
             reasons,
             "Risk/Reward",
             0,
-            "Brak możliwości wyliczenia R/R - brak poziomu wejścia",
+            "Brak możliwości wyliczenia R/R.",
         )
+
         return 0, reasons
+
+    # --------------------------------------------------------
+    # POSZCZEGÓLNE KOMPONENTY
+    # --------------------------------------------------------
 
     scorers = [
         score_entry_rr,
@@ -67,253 +119,769 @@ def calculate_entry_score(analysis):
 
     for scorer in scorers:
         pts, msgs = scorer(analysis)
+
         score += pts
         reasons.extend(msgs)
 
-    final_score = max(0, score)
+    # --------------------------------------------------------
+    # OGRANICZENIE DO 0-100
+    # --------------------------------------------------------
+
+    final_score = max(0, min(100, int(score)))
+
     return final_score, reasons
 
 
+# ============================================================
+# 1. RISK / REWARD
+# ============================================================
+
 def score_entry_rr(analysis):
+    """
+    Maksimum: 35 pkt
+    """
+
     score = 0
     reasons = []
 
-    # Bezpieczne pobranie R/R (zabezpieczenie przed None)
-    rr = getattr(analysis, "risk_reward", None)
+    rr = _safe_number(
+        getattr(analysis, "risk_reward", None)
+    )
 
     min_rr = getattr(config, "MIN_RR", 2.0)
-    entry_pts_rr = getattr(config, "ENTRY_POINTS_RR", 35)
 
-    # 1. Obsługa braku wyliczonego R/R
-    if rr is None or pd.isna(rr):
+    max_points = getattr(
+        config,
+        "ENTRY_POINTS_RR",
+        35,
+    )
+
+    if rr is None:
         add_reason(
             reasons,
             "Risk/Reward",
             0,
-            "Brak możliwości wyliczenia profilu R/R (brak stref wsparcia/oporu)",
+            "Brak możliwości wyliczenia R/R.",
         )
-        return score, reasons
+        return 0, reasons
 
-    # 2. Ocena na podstawie wartości R/R
+    # --------------------------------------------------------
+    # R/R >= 3.0
+    # --------------------------------------------------------
+
     if rr >= 3.0:
-        score += entry_pts_rr
+
+        score = max_points
+
         add_reason(
-            reasons, "Risk/Reward", entry_pts_rr, f"Wybitny profil R/R = {rr:.2f}"
+            reasons,
+            "Risk/Reward",
+            score,
+            f"Wybitny profil R/R = {rr:.2f}",
         )
+
+    # --------------------------------------------------------
+    # R/R >= MIN_RR
+    # --------------------------------------------------------
+
     elif rr >= min_rr:
-        pts = int(entry_pts_rr * 0.7)
-        score += pts
-        add_reason(reasons, "Risk/Reward", pts, f"Dobre R/R = {rr:.2f}")
-    elif rr > 0:
+
+        score = int(max_points * 0.70)
+
         add_reason(
             reasons,
             "Risk/Reward",
-            0,
-            f"R/R zbyt niskie ({rr:.2f} < {min_rr:.1f}) - zły stosunek ryzyka do zysku",
+            score,
+            f"Dobre R/R = {rr:.2f}",
         )
-    else:
+
+    # --------------------------------------------------------
+    # R/R dodatnie, ale za małe
+    # --------------------------------------------------------
+
+    elif rr > 0:
+
         add_reason(
             reasons,
             "Risk/Reward",
             0,
-            "Negatywny profil R/R - Stop Loss powyżej/na poziomie ceny",
+            (
+                f"R/R zbyt niskie "
+                f"({rr:.2f} < {min_rr:.2f})"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # R/R <= 0
+    # --------------------------------------------------------
+
+    else:
+
+        add_reason(
+            reasons,
+            "Risk/Reward",
+            0,
+            "Nieprawidłowy profil R/R.",
         )
 
     return score, reasons
 
+
+# ============================================================
+# 2. PROXIMITY
+# ============================================================
 
 def score_entry_proximity(analysis):
+    """
+    Maksimum: 25 pkt
+
+    Priorytet:
+
+        1. wsparcie
+        2. EMA20
+        3. dolna Bollinger Band
+
+    + dodatkowo 5 pkt za Bollinger Squeeze.
+    """
+
     score = 0
     reasons = []
 
-    price = getattr(analysis, "price", None)
-    support = getattr(analysis, "nearest_support", None)
-    max_dist = getattr(config, "MAX_SUPPORT_DISTANCE", 2.5)
-    entry_pts_support = getattr(config, "ENTRY_POINTS_SUPPORT", 25)
+    price = _safe_number(
+        getattr(analysis, "price", None)
+    )
 
-    if price is None or pd.isna(price) or price <= 0:
-        add_reason(
-            reasons, "Proximity", 0, "Brak aktualnej ceny do wyznaczenia bliskości"
+    support = getattr(
+        analysis,
+        "nearest_support",
+        None,
+    )
+
+    ema20 = _safe_number(
+        getattr(analysis, "ema20", None)
+    )
+
+    bb_lower = _safe_number(
+        getattr(analysis, "bb_lower", None)
+    )
+
+    bb_squeeze = bool(
+        getattr(
+            analysis,
+            "bb_squeeze",
+            False,
         )
-        return score, reasons
+    )
 
-    # --- A. BADANIE ODLEGŁOŚCI OD WSPARCIA ---
-    dist_supp = None
-    touches = 1
+    max_dist = getattr(
+        config,
+        "MAX_SUPPORT_DISTANCE",
+        2.5,
+    )
 
-    if support is not None and support.get("price") is not None:
-        supp_price = support["price"]
-        # Wyliczamy odchylenie w % (dodatnie = cena NAD wsparciem, ujemne = cena POD wsparciem)
-        dist_supp = ((price - supp_price) / price) * 100
-        #touches = support.get("touches", 1) ## poprawka kodu poniżej
-        raw_touches = support.get("touches") if support else None
-        touches = raw_touches if (raw_touches is not None) else 1
+    max_points = getattr(
+        config,
+        "ENTRY_POINTS_SUPPORT",
+        25,
+    )
 
-    # --- B. BADANIE ODLEGŁOŚCI OD EMA20 I BOLLINGERA ---
-    dist_ema20 = None
-    ema20 = getattr(analysis, "ema20", None)
-    if ema20 is not None and not pd.isna(ema20) and ema20 > 0:
-        dist_ema20 = abs((price - ema20) / ema20) * 100
+    if price is None or price <= 0:
 
-    bb_lower = getattr(analysis, "bb_lower", None)
-    bb_squeeze = getattr(analysis, "bb_squeeze", False)
-
-    # --- C. MAIN SCORING LOGIC ---
-    # 1. Główny test: Bliskość wsparcia (z obsługą lekkiego naruszenia do -0.5%)
-    if dist_supp is not None and -0.5 <= dist_supp <= max_dist:
-        # Bezpieczne pobranie flagi ATH (domyślnie False)
-        is_near_ath = bool(getattr(analysis, "is_near_ath", False))
-        # 1. LOGIKA DLA ATH / NOWYCH SZCZYTÓW
-        if is_near_ath:
-            # Na ATH wyznaczamy premie za SAM FAKT testu dawnego szczytu (zasada biegunowości)
-            # Nie wymagamy wielu testów! 1 lub 2 testy są idealne.
-            bonus_strength = 5 if touches <= 2 else 0
-            bonus_msg = " [Obrona poziomu wybicia ATH]"
-        # 2. LOGIKA KLASYCZNA (Konsolidacja / Zwykły trend)
-        else:
-            # Premia za mocną strefę wsparcia (na bazie Twojego rate_supports)
-            bonus_strength = 5 if touches >= 4 else 0
-            bonus_msg = f" [Silna strefa: {touches} testów]" if bonus_strength > 0 else ""
-        
-        total_pts = entry_pts_support + bonus_strength
-
-        score += total_pts
-
-        add_reason(
-            reasons,
-            "Proximity",
-            total_pts,
-            f"Idealne miejsce: cena tuż przy wsparciu ({dist_supp:.2f}%){bonus_msg}",
-        )
-
-    # 2. Alternatywny test: Bliskość średniej EMA20 (UJEDNOLICONE PROGI)
-    elif dist_ema20 is not None and dist_ema20 <= 2.0:
-        pts = int(entry_pts_support * 0.8)  # np. 24 pkt
-        score += pts
-        add_reason(
-            reasons,
-            "Proximity",
-            pts,
-            f"Dobre wejście: test średniej EMA20 (odchylenie {dist_ema20:.2f}%)",
-        )
-
-    # 3. Dodatkowy przedział: Umiarkowany odlot od EMA20 (2.0% - 4.0%)
-    elif dist_ema20 is not None and 2.0 < dist_ema20 <= 4.0:
-        pts = int(entry_pts_support * 0.3)  # mała premia (np. 9 pkt)
-        score += pts
-        add_reason(
-            reasons,
-            "Proximity",
-            pts,
-            f"Lekki odlot od EMA20 (+{dist_ema20:.2f}%) - brak bezpośredniego wsparcia pod nogami",
-        )
-
-    # 4. Alternatywny test: Dolna Wstęga Bollingera
-    elif (
-        bb_lower is not None
-        and not pd.isna(bb_lower)
-        and price <= bb_lower * 1.01
-    ):
-        pts = int(entry_pts_support * 0.7)
-        score += pts
-        add_reason(
-            reasons,
-            "Proximity",
-            pts,
-            f"Test dolnej Wstęgi Bollingera ({bb_lower:2f}) (strefa wyprzedania)",
-        )
-
-    # 5. Znaczny odlot
-    else:
         add_reason(
             reasons,
             "Proximity",
             0,
-            f"Cena w powietrzu (ponad 4% od wsparcia, EMA20 ({ema20:2f}) i dolnej BB ({bb_lower:2f}))",
+            "Brak aktualnej ceny.",
         )
 
-    # --- D. DODATKOWA PREMIA: BOLLINGER SQUEEZE ---
-    if bb_squeeze:
-        score += 5
+        return 0, reasons
+
+    # ========================================================
+    # ODLEGŁOŚĆ OD WSPARCIA
+    # ========================================================
+
+    dist_support = None
+    touches = 1
+
+    if isinstance(support, dict):
+
+        support_price = _safe_number(
+            support.get("price")
+        )
+
+        if (
+            support_price is not None
+            and support_price > 0
+        ):
+
+            # dodatnie = cena NAD wsparciem
+            # ujemne = cena POD wsparciem
+            dist_support = (
+                (price - support_price)
+                / price
+            ) * 100
+
+            # Używamy "touches", bo tego pola
+            # używa system stref wsparcia.
+            raw_touches = support.get("touches")
+
+            if raw_touches is not None:
+                try:
+                    touches = int(raw_touches)
+                except (TypeError, ValueError):
+                    touches = 1
+
+    # ========================================================
+    # ODLEGŁOŚĆ OD EMA20
+    # ========================================================
+
+    dist_ema20 = None
+
+    if ema20 is not None and ema20 > 0:
+
+        dist_ema20 = (
+            abs(price - ema20)
+            / ema20
+        ) * 100
+
+    # ========================================================
+    # 1. WSPARCIE
+    # ========================================================
+
+    if (
+        dist_support is not None
+        and -0.5 <= dist_support <= max_dist
+    ):
+
+        bonus_strength = 0
+        bonus_msg = ""
+
+        is_near_ath = bool(
+            getattr(
+                analysis,
+                "is_near_ath",
+                False,
+            )
+        )
+
+        # ----------------------------------------------------
+        # ATH / retest wybicia
+        # ----------------------------------------------------
+
+        if is_near_ath:
+
+            if touches <= 2:
+                bonus_strength = 3
+                bonus_msg = (
+                    " [retest poziomu wybicia]"
+                )
+
+        # ----------------------------------------------------
+        # Normalna strefa wsparcia
+        # ----------------------------------------------------
+
+        else:
+
+            if touches >= 4:
+                bonus_strength = 3
+                bonus_msg = (
+                    f" [silna strefa: {touches} testów]"
+                )
+
+        total_points = min(
+            max_points,
+            max_points + bonus_strength,
+        )
+
+        score += total_points
+
         add_reason(
             reasons,
             "Proximity",
-            5,
-            "Ściśnięcie Wstęg Bollingera (Squeeze) – tuż przed wybuchem zmienności",
+            total_points,
+            (
+                f"Cena blisko wsparcia "
+                f"({dist_support:.2f}%)"
+                f"{bonus_msg}"
+            ),
+        )
+
+    # ========================================================
+    # 2. EMA20
+    # ========================================================
+
+    elif (
+        dist_ema20 is not None
+        and dist_ema20 <= 2.0
+    ):
+
+        points = int(max_points * 0.80)
+
+        score += points
+
+        add_reason(
+            reasons,
+            "Proximity",
+            points,
+            (
+                f"Cena blisko EMA20 "
+                f"(odchylenie {dist_ema20:.2f}%)"
+            ),
+        )
+
+    # ========================================================
+    # 3. EMA20 2-4%
+    # ========================================================
+
+    elif (
+        dist_ema20 is not None
+        and 2.0 < dist_ema20 <= 4.0
+    ):
+
+        points = int(max_points * 0.30)
+
+        score += points
+
+        add_reason(
+            reasons,
+            "Proximity",
+            points,
+            (
+                f"Cena umiarkowanie oddalona "
+                f"od EMA20 ({dist_ema20:.2f}%)"
+            ),
+        )
+
+    # ========================================================
+    # 4. DOLNA BOLLINGER BAND
+    # ========================================================
+
+    elif (
+        bb_lower is not None
+        and price <= bb_lower * 1.01
+    ):
+
+        points = int(max_points * 0.70)
+
+        score += points
+
+        add_reason(
+            reasons,
+            "Proximity",
+            points,
+            (
+                f"Test dolnej Bollinger Band "
+                f"({bb_lower:.2f})"
+            ),
+        )
+
+    # ========================================================
+    # 5. BRAK DOBREJ LOKALIZACJI
+    # ========================================================
+
+    else:
+
+        add_reason(
+            reasons,
+            "Proximity",
+            0,
+            "Cena znajduje się zbyt daleko od dobrego poziomu wejścia.",
+        )
+
+    # ========================================================
+    # BOLLINGER SQUEEZE
+    # ========================================================
+
+    if bb_squeeze:
+
+        squeeze_points = 5
+
+        score += squeeze_points
+
+        add_reason(
+            reasons,
+            "Proximity",
+            squeeze_points,
+            (
+                "Bollinger Squeeze - "
+                "spadek zmienności przed możliwym wybiciem"
+            ),
         )
 
     return score, reasons
 
 
-"""
-score_entry_trigger (MACD + Stochastic + DI)
-Rozszerzamy wyzwalacze o Stochastic (dla szybkiego impulsu ze strefy wyprzedania) oraz opcjonalny dodatek za ADX/DI
-"""
+# ============================================================
+# 3. TRIGGER
+# ============================================================
+
 def score_entry_trigger(analysis):
+    """
+    Maksimum: 30 pkt
+
+    MACD:
+        20 pkt
+
+    Stochastic:
+         5 pkt
+
+    Przyszłościowo:
+        +5 pkt ADX/DI
+    """
+
     score = 0
     reasons = []
 
-    macd_above = getattr(analysis, "macd", 0) > getattr(
-        analysis, "macd_signal", 0
+    # ========================================================
+    # MACD
+    # ========================================================
+
+    macd = _safe_number(
+        getattr(analysis, "macd", None)
     )
-    hist_rising = getattr(analysis, "histogram_rising", False)
 
-    stoch_k = getattr(analysis, "stoch_k", None)
-    stoch_d = getattr(analysis, "stoch_d", None)
+    macd_signal = _safe_number(
+        getattr(
+            analysis,
+            "macd_signal",
+            None,
+        )
+    )
 
-    entry_pts_macd = getattr(config, "ENTRY_POINTS_MACD", 25)
+    prev_macd = _safe_number(
+        getattr(
+            analysis,
+            "prev_macd",
+            None,
+        )
+    )
 
-    # 1. MACD Trigger (Główny impuls momentum)
-    if macd_above and hist_rising:
-        score += entry_pts_macd
+    prev_macd_signal = _safe_number(
+        getattr(
+            analysis,
+            "prev_macd_signal",
+            None,
+        )
+    )
+
+    histogram_rising = bool(
+        getattr(
+            analysis,
+            "histogram_rising",
+            False,
+        )
+    )
+
+    macd_points = 20
+
+    # Brak danych
+    if macd is None or macd_signal is None:
+
         add_reason(
             reasons,
             "Trigger",
-            entry_pts_macd,
-            "MACD rośnie i potwierdza dynamikę wejścia",
+            0,
+            "Brak danych MACD.",
         )
-    elif macd_above:
-        pts = int(entry_pts_macd * 0.5)
-        score += pts
-        add_reason(
-            reasons,
-            "Trigger",
-            pts,
-            "MACD w strefie wzrostowej (brak świeżego pędu)",
-        )
+
     else:
-        add_reason(reasons, "Trigger", 0, "Brak sygnału popytowego na MACD")
 
-    # 2. STOCHASTIC TRIGGER (Świeży sygnał z dołka - premia punktowa)
-    if stoch_k is not None and stoch_d is not None:
-        # Złote przecięcie na Stochastyku w strefie wyprzedania (<25)
-        if stoch_k < 25 and stoch_k > stoch_d:
-            score += 10
+        macd_bullish = macd > macd_signal
+
+        # ----------------------------------------------------
+        # ŚWIEŻE PRZECIĘCIE MACD
+        # ----------------------------------------------------
+
+        fresh_cross = (
+            prev_macd is not None
+            and prev_macd_signal is not None
+            and prev_macd <= prev_macd_signal
+            and macd > macd_signal
+        )
+
+        if fresh_cross:
+
+            score += macd_points
+
             add_reason(
                 reasons,
                 "Trigger",
-                10,
-                f"Szybki trigger: Stochastic wybija z wyprzedania (%K={stoch_k:.1f})",
+                macd_points,
+                "Świeże bycze przecięcie MACD.",
             )
+
+        # ----------------------------------------------------
+        # MACD bullish + histogram rośnie
+        # ----------------------------------------------------
+
+        elif macd_bullish and histogram_rising:
+
+            points = 15
+
+            score += points
+
+            add_reason(
+                reasons,
+                "Trigger",
+                points,
+                "MACD jest wzrostowy i histogram rośnie.",
+            )
+
+        # ----------------------------------------------------
+        # MACD bullish
+        # ----------------------------------------------------
+
+        elif macd_bullish:
+
+            points = 8
+
+            score += points
+
+            add_reason(
+                reasons,
+                "Trigger",
+                points,
+                "MACD jest powyżej linii sygnałowej.",
+            )
+
+        # ----------------------------------------------------
+        # MACD bearish
+        # ----------------------------------------------------
+
+        else:
+
+            add_reason(
+                reasons,
+                "Trigger",
+                0,
+                "Brak byczego sygnału MACD.",
+            )
+
+    # ========================================================
+    # STOCHASTIC
+    # ========================================================
+
+    stoch_k = _safe_number(
+        getattr(
+            analysis,
+            "stoch_k",
+            None,
+        )
+    )
+
+    stoch_d = _safe_number(
+        getattr(
+            analysis,
+            "stoch_d",
+            None,
+        )
+    )
+
+    prev_stoch_k = _safe_number(
+        getattr(
+            analysis,
+            "prev_stoch_k",
+            None,
+        )
+    )
+
+    prev_stoch_d = _safe_number(
+        getattr(
+            analysis,
+            "prev_stoch_d",
+            None,
+        )
+    )
+
+    # ========================================================
+    # ŚWIEŻE PRZECIĘCIE W STREFIE WYPRZEDANIA
+    # ========================================================
+
+    if (
+        stoch_k is not None
+        and stoch_d is not None
+        and prev_stoch_k is not None
+        and prev_stoch_d is not None
+    ):
+
+        fresh_stoch_cross = (
+            prev_stoch_k <= prev_stoch_d
+            and stoch_k > stoch_d
+        )
+
+        if fresh_stoch_cross and stoch_k < 30:
+
+            points = 5
+
+            score += points
+
+            add_reason(
+                reasons,
+                "Trigger",
+                points,
+                (
+                    "Świeże bycze przecięcie "
+                    f"Stochastic w strefie wyprzedania "
+                    f"(%K={stoch_k:.1f})"
+                ),
+            )
+
+        elif (
+            stoch_k < 25
+            and stoch_k > stoch_d
+        ):
+
+            points = 3
+
+            score += points
+
+            add_reason(
+                reasons,
+                "Trigger",
+                points,
+                (
+                    "Stochastic wychodzi "
+                    f"z wyprzedania (%K={stoch_k:.1f})"
+                ),
+            )
+
+        else:
+
+            add_reason(
+                reasons,
+                "Trigger",
+                0,
+                "Brak świeżego byczego triggera Stochastic.",
+            )
+
+    else:
+
+        add_reason(
+            reasons,
+            "Trigger",
+            0,
+            "Brak pełnych danych Stochastic.",
+        )
+
+    # ========================================================
+    # OGRANICZENIE TRIGGERA
+    # ========================================================
+
+    score = min(score, 30)
 
     return score, reasons
 
 
+# ============================================================
+# 4. VOLUME
+# ============================================================
+
 def score_entry_volume(analysis):
+    """
+    Maksimum: 10 pkt
+    """
+
     score = 0
     reasons = []
-    vol_ratio = getattr(analysis, "vol_ratio", 1.0)
-    pts = getattr(config, "ENTRY_POINTS_VOLUME", 10)
 
-    if vol_ratio >= 1.3:
-        score += pts
+    vol_ratio = _safe_number(
+        getattr(
+            analysis,
+            "vol_ratio",
+            None,
+        ),
+        default=1.0,
+    )
+
+    max_points = getattr(
+        config,
+        "ENTRY_POINTS_VOLUME",
+        10,
+    )
+
+    # ========================================================
+    # BARDZO MOCNY WOLUMEN
+    # ========================================================
+
+    if vol_ratio >= 1.5:
+
+        score = max_points
+
         add_reason(
             reasons,
             "Volume",
-            pts,
-            f"Wejście potwierdzone obrotami ({vol_ratio:.1f}x średniej)",
+            score,
+            (
+                f"Bardzo mocny wolumen "
+                f"({vol_ratio:.2f}x średniej)"
+            ),
         )
+
+    # ========================================================
+    # DOBRY WOLUMEN
+    # ========================================================
+
+    elif vol_ratio >= 1.3:
+
+        score = 7
+
+        add_reason(
+            reasons,
+            "Volume",
+            score,
+            (
+                f"Podwyższony wolumen "
+                f"({vol_ratio:.2f}x średniej)"
+            ),
+        )
+
+    # ========================================================
+    # UMIARKOWANY
+    # ========================================================
+
+    elif vol_ratio >= 1.2:
+
+        score = 5
+
+        add_reason(
+            reasons,
+            "Volume",
+            score,
+            (
+                f"Umiarkowanie podwyższony wolumen "
+                f"({vol_ratio:.2f}x średniej)"
+            ),
+        )
+
+    # ========================================================
+    # LEKKO PODWYŻSZONY
+    # ========================================================
+
+    elif vol_ratio >= 1.1:
+
+        score = 3
+
+        add_reason(
+            reasons,
+            "Volume",
+            score,
+            (
+                f"Nieznacznie podwyższony wolumen "
+                f"({vol_ratio:.2f}x średniej)"
+            ),
+        )
+
+    # ========================================================
+    # NORMALNY / NISKI
+    # ========================================================
+
     else:
-        add_reason(reasons, "Volume", 0, "Przeciętny wolumen na wejściu")
+
+        add_reason(
+            reasons,
+            "Volume",
+            0,
+            "Przeciętny lub niski wolumen na wejściu.",
+        )
 
     return score, reasons
