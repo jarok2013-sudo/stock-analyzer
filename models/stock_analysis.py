@@ -383,8 +383,49 @@ class StockAnalysis:
         self.trade_signal = generator.generate()
 
     def calculate_confidence(self):
-        """Oblicza poziom pewności sygnału."""
-        self.confidence = (self.quality_score + self.entry_score) / 2
+        """
+        Oblicza poziom pewności sygnału na podstawie 4 filarów
+        oraz nakłada filtr twardy (bezpiecznik R/R).
+        """
+        # 1. Pobieramy wartości składowe (domyślnie 0, jeśli brak)
+        entry = getattr(self, "entry_score", 0) or 0
+        quality = getattr(self, "quality_score", 0) or 0
+        fundamental = getattr(self, "fundamental_score", 0) or 0
+        sentiment = getattr(self, "analyst_sentiment_score", 0) or 0
+        rr = getattr(self, "risk_reward", 0) or 0
+
+        # 2. BEZPIECZNIK: Brak zdefiniowanego R/R lub ujemne R/R zeruje pewność
+        if rr <= 0 or entry == 0:
+            self.confidence = 0.0
+            return self.confidence
+
+        # 3. ŚREDNIA WAŻONA (Wagi dostosowane pod Swing Trading)
+        # Entry Score ma najwyższą wagę, bo odpowiada za precyzję wejścia
+        w_entry = 0.35
+        w_quality = 0.25
+        w_fundamental = 0.25
+        w_sentiment = 0.15
+
+        raw_confidence = (
+            (entry * w_entry)
+            + (quality * w_quality)
+            + (fundamental * w_fundamental)
+            + (sentiment * w_sentiment)
+        )
+
+        # 4. BONUS / KARA Z TYTUŁU MOCY R/R (Profil Ryzyka)
+        # Bardzo wysokie RR (> 2.5) zwiększa pewność, niskie (< 1.5) ją obniża
+        rr_modifier = 1.0
+        if rr >= 3.0:
+            rr_modifier = 1.05  # +5% premii
+        elif rr < 1.5:
+            rr_modifier = 0.85  # -15% kary
+
+        final_confidence = raw_confidence * rr_modifier
+
+        # Ograniczenie wyniku do przedziału <0, 100>
+        self.confidence = round(max(0.0, min(100.0, final_confidence)), 2)
+        return self.confidence
 
     def debug_print_analysis(self):
         """Drukuje podsumowanie kontrolne analizowanego waloru."""

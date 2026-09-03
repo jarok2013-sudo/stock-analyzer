@@ -1,6 +1,7 @@
 from colorama import Fore, Style, init
 import pandas as pd
 from utils.func import fmt_float
+from utils import interpreter as interp
 
 init(autoreset=True)
 
@@ -9,15 +10,16 @@ class Report:
 
     def __init__(self, analysis):
         self.analysis = analysis
-        # Pobieramy walutę dynamicznie dla całego raportu
         self.info = getattr(self.analysis, "instrument_info", {}) or {}
         self.currency = self.info.get("currency", "PLN")
 
     def print(self):
         self.report_header()
         self.print_dynamic_price_ladder()
-        self.report_fundamentals()
         self.report_levels()
+        self.report_total_score()
+        self.report_sentiment_score()
+        self.report_fundamental_score()
         self.report_quality_score()
         self.report_entry_score()
         self.report_trade()
@@ -29,57 +31,54 @@ class Report:
         self.print()
 
     def report_header(self):
-        #info = getattr(self.analysis, "instrument_info", {}) or {}
         long_name = self.info.get("longName", self.analysis.symbol)
         country = self.info.get("country", "N/A")
         sector = self.info.get("sector", "N/A")
         inst_type = self.info.get("type", "Akcje")
 
         trend_dict = getattr(self.analysis, "trend", {}) or {}
-        trend_code = trend_dict.get("trend", "N/A")
-        trend_desc = trend_dict.get("desc", "Brak opisu")
+        t_code = trend_dict.get("trend", "N/A")
+        t_desc = trend_dict.get("desc", "Brak opisu")
 
         print("\n" + "#" * 105)
-        print("⚠️ Uwaga: Gra w inwestowanie na własną odpowiedzialność — strata może zaboleć, gdy wygrasz - podziel się!")
-        print("Raport edukacyjny, nie stanowi porady. Kod skanera: https://github.com/jarok2013-sudo/stock-analyzer ⚠️")
-        print( "#" * 105)
-        print("\n" )
-        print(f"Instrument : {self.analysis.symbol}")
         print(
-            f"Full info  : {long_name} ({self.currency}, {country}, {sector}, {inst_type})"
+            "⚠️ Uwaga: Gra w inwestowanie na własną odpowiedzialność — strata może zaboleć, gdy wygrasz - podziel się!"
         )
-        print(f"Cena       : {self.analysis.price:.2f} {self.currency}")
-        print(f"Trend      : {trend_code} - {trend_desc}")
-        print()
-
-        ema20_str = fmt_float(getattr(self.analysis, "ema20", None))
-        ema50_str = fmt_float(getattr(self.analysis, "ema50", None))
-        ema200_str = fmt_float(getattr(self.analysis, "ema200", None))
-
         print(
-            f"EMA20  : {ema20_str:<8} EMA50  : {ema50_str:<8} EMA200 : {ema200_str}"
+            "Raport edukacyjny, nie stanowi porady. Kod skanera: https://github.com/jarok2013-sudo/stock-analyzer ⚠️"
         )
-        print()
+        print("#" * 105 + "\n")
 
-        rsi = getattr(self.analysis, "rsi", None)
-        macd = getattr(self.analysis, "macd", None)
-        signal = getattr(self.analysis, "macd_signal", None)
-        atr = getattr(self.analysis, "atr", None)
-        vol_ratio = getattr(self.analysis, "vol_ratio", None)
+        print(f"Instrument   : {self.analysis.symbol} ({long_name})")
+        print(f"Giełda/Sektor: {country} | {sector} | {inst_type}")
+        print(f"Cena Rynkowa : {self.analysis.price:.2f} {self.currency}")
+        print(f"Status Trendu: {t_code} ({t_desc})")
+        print("-" * 75)
 
-        rsi_str = f"{rsi:.1f}" if rsi is not None else "N/D"
-        macd_str = f"{macd:.3f}" if macd is not None else "N/D"
-        sig_str = f"{signal:.3f}" if signal is not None else "N/D"
-        atr_str = (
-            f"{atr:.2f} {self.currency}" if atr is not None else "N/D"
-        )
-        vol_str = f"{vol_ratio:.2f}x" if vol_ratio is not None else "N/D"
+        # WSKAŹNIKI I INTERPRETER
+        rsi_val = getattr(self.analysis, "rsi", None)
+        macd_val = getattr(self.analysis, "macd", None)
+        sig_val = getattr(self.analysis, "macd_signal", None)
+        vol_val = getattr(self.analysis, "vol_ratio", None)
+        atr_val = getattr(self.analysis, "atr", None)
 
+        # Bezpieczne pobranie struktury MACD
+        macd_data = interp.interpret_macd(macd_val, sig_val)
+        if isinstance(macd_data, dict):
+            m_str = macd_data.get("macd", fmt_float(macd_val, 3))
+            s_str = macd_data.get("signal", fmt_float(sig_val, 3))
+            st_str = macd_data.get("status", "")
+            macd_fmt = f"MACD {m_str} / Signal: {s_str} ➔ {st_str}"
+        else:
+            macd_fmt = str(macd_data)
+
+        print(f"Pęd (RSI 14)    : {interp.interpret_rsi(rsi_val)}")
+        print(f"Sygnał MACD     : {macd_fmt}")
         print(
-            f"RSI    : {rsi_str:<8} MACD   : {macd_str:<8} Signal : {sig_str}"
+            f"Zmienność (ATR) : {interp.interpret_atr(atr_val, self.analysis.price, self.currency)}"
         )
-        print(f"ATR(14): {atr_str:<8} Vol/SMA20: {vol_str}")
-        print("=" * 70)
+        print(f"Aktywność Vol   : {interp.interpret_volume(vol_val)}")
+        print("=" * 75)
 
     def print_dynamic_price_ladder(self):
         analysis = self.analysis
@@ -88,7 +87,6 @@ class Report:
 
         levels = []
 
-        # Target Price Analityków w drabinie cenowej
         target_p = getattr(analysis, "target_mean_price", None)
         if target_p:
             dist_target = ((target_p - price) / price) * 100
@@ -100,7 +98,6 @@ class Report:
                 "type": "TARGET",
             })
 
-        # 1. OPÓR
         res = getattr(analysis, "nearest_resistance", None)
         if res and res.get("price"):
             res_p = res["price"]
@@ -114,7 +111,6 @@ class Report:
                 "type": "RESISTANCE",
             })
 
-        # 2. WSPARCIE
         supp = getattr(analysis, "nearest_support", None)
         if supp and supp.get("price"):
             sup_p = supp["price"]
@@ -128,7 +124,6 @@ class Report:
                 "type": "SUPPORT",
             })
 
-        # 3. TAKE PROFIT (TP)
         tp_val = getattr(analysis, "take_profit", None)
         if tp_val is not None:
             dist_tp = ((tp_val - price) / price) * 100
@@ -140,7 +135,6 @@ class Report:
                 "type": "TP",
             })
 
-        # 4. STOP LOSS (SL)
         sl_val = getattr(analysis, "stop_loss", None)
         if sl_val is not None:
             dist_sl = ((price - sl_val) / price) * 100
@@ -152,7 +146,6 @@ class Report:
                 "type": "SL",
             })
 
-        # 5. ŚREDNIE KROCZĄCE
         for ema_name in ["ema20", "ema50", "ema200"]:
             ema_val = getattr(analysis, ema_name, None)
             if ema_val is not None:
@@ -164,7 +157,6 @@ class Report:
                     "type": "EMA",
                 })
 
-        # 6. AKTUALNA CENA
         levels.append({
             "price": price,
             "label_raw": "💲 AKTUALNA CENA",
@@ -173,10 +165,8 @@ class Report:
             "type": "PRICE",
         })
 
-        # Sortowanie od najczytelniejszego (najwyższa cena na górze)
         levels.sort(key=lambda x: x["price"], reverse=True)
 
-        # Renderowanie drabiny
         print("\n" + "=" * 70)
         print(f" 📊 DRABINA POZIOMÓW CENOWYCH: {analysis.symbol}")
         print("=" * 70)
@@ -193,63 +183,148 @@ class Report:
         print("=" * 70)
 
     def report_levels(self):
-        print("\n========== LEVELS ==========")
+        print("\n========== KLUCZOWE POZIOMY I UKŁAD ŚREDNICH ==========")
+        price = self.analysis.price
 
+        print("\n📌 POŁOŻENIE CENY WZGLĘDEM ŚREDNICH (EMA):")
+        ema20 = getattr(self.analysis, "ema20", None)
+        ema50 = getattr(self.analysis, "ema50", None)
+        ema200 = getattr(self.analysis, "ema200", None)
+
+        print(
+            "  • "
+            + interp.interpret_ema_position(
+                price, ema20, "EMA20 (Krótkoterminowa)", self.currency
+            )
+        )
+        print(
+            "  • "
+            + interp.interpret_ema_position(
+                price, ema50, "EMA50 (Średnioterminowa)", self.currency
+            )
+        )
+        print(
+            "  • "
+            + interp.interpret_ema_position(
+                price, ema200, "EMA200 (Długoterminowa)", self.currency
+            )
+        )
+
+        print("\n🛡️ POZIOMY WSPARCIA I OPORU:")
+        supp = getattr(self.analysis, "nearest_support", None)
+        res = getattr(self.analysis, "nearest_resistance", None)
         dist_s = getattr(self.analysis, "support_distance", None)
         dist_r = getattr(self.analysis, "resistance_distance", None)
 
-        # 1. OBSŁUGA WSPARCIA
-        supp = getattr(self.analysis, "nearest_support", None)
-        if supp and supp.get("is_atl"):
-            print("Support    : BRAK (Spadek poniżej minimów / ATL) ⚠️")
-            print("Distance S : N/A")
-        elif supp and supp.get("price") is not None:
-            touches = supp.get("touches", 1)
-            last_test = supp.get("last_test", "Brak daty")
+        if supp and supp.get("price"):
+            s_price = supp["price"]
+            s_touches = supp.get("touches", 1)
             print(
-                f"Support    : {supp['price']:.2f} {self.currency} ({touches}x)  Ostatni test: {last_test}"
-            )
-            print(
-                f"Distance S : {dist_s:.2f}%"
-                if dist_s is not None
-                else "Distance S : N/A"
+                f"  • Najbliższe Wsparcie : {s_price:.2f} {self.currency} [{s_touches}x testy] ➔ Odstęp: {interp.interpret_distance(dist_s, is_support=True)}"
             )
         else:
-            print("Support    : Nie wyznaczono")
-            print("Distance S : N/A")
+            print("  • Najbliższe Wsparcie : BRAK / Nie wyznaczono")
 
-        # 2. OBSŁUGA OPORU
-        res = getattr(self.analysis, "nearest_resistance", None)
         if res and res.get("is_ath"):
-            print("Resistance : BRAK (Wybicie szczytów / ATH) 🚀")
-            print("Distance R : Otwarta droga do wzrostów")
-        elif res and res.get("price") is not None:
-            touches = res.get("touches", 1)
-            last_test = res.get("last_test", "Brak daty")
             print(
-                f"Resistance : {res['price']:.2f} {self.currency} ({touches}x)  Ostatni test: {last_test}"
+                "  • Najbliższy Opór     : BRAK (Wybicie szczytów / ATH) 🚀 ➔ Otwarta droga do wzrostów"
             )
+        elif res and res.get("price"):
+            r_price = res["price"]
+            r_touches = res.get("touches", 1)
             print(
-                f"Distance R : {dist_r:.2f}%"
-                if dist_r is not None
-                else "Distance R : N/A"
+                f"  • Najbliższy Opór     : {r_price:.2f} {self.currency} [{r_touches}x testy] ➔ Odstęp: {interp.interpret_distance(dist_r, is_support=False)}"
             )
         else:
-            print("Resistance : Nie wyznaczono")
-            print("Distance R : N/A")
+            print("  • Najbliższy Opór     : Nie wyznaczono")
+
+    def report_total_score(self):
+        print("\n========================================================================")
+        print("                     📊 TOTAL SCORE & CONFIDENCE                        ")
+        print("========================================================================")
+
+        confidence = self.analysis.calculate_confidence()
+
+        s_score = getattr(self.analysis, "analyst_sentiment_score", getattr(self.analysis, "sentiment_score", 0)) or 0
+        f_score = getattr(self.analysis, "fundamental_score", 0) or 0
+        q_score = getattr(self.analysis, "quality_score", 0) or 0
+        e_score = getattr(self.analysis, "entry_score", 0) or 0
+        rr = getattr(self.analysis, "risk_reward", 0) or 0
+
+        print(f"  Analyst Sentiment : {s_score:3d}/100 [Waga: 15%]")
+        print(f"  Fundamentals      : {f_score:3d}/100 [Waga: 25%]")
+        print(f"  Quality Score     : {q_score:3d}/100 [Waga: 25%]")
+        print(f"  Entry Score       : {e_score:3d}/100 [Waga: 35%]")
+        print("  ----------------------------------------")
+
+        bar_length = 20
+        filled_length = int(bar_length * confidence // 100)
+        bar = "█" * filled_length + "░" * (bar_length - filled_length)
+
+        if rr <= 0 or e_score == 0:
+            status_txt = f"{Fore.RED}REJECTED 🛑 (Brak profilu R/R lub błędny punkt wejścia){Style.RESET_ALL}"
+        elif confidence >= 80:
+            status_txt = f"{Fore.GREEN}{confidence:.1f}% 🟢 [WYSOKA PEWNOŚĆ / STRONG SETUP]{Style.RESET_ALL}"
+        elif confidence >= 60:
+            status_txt = f"{Fore.YELLOW}{confidence:.1f}% 🟡 [UMIARKOWANA PEWNOŚĆ / WATCHLIST]{Style.RESET_ALL}"
+        else:
+            status_txt = f"{Fore.RED}{confidence:.1f}% 🔴 [NISKA PEWNOŚĆ / OMIJAJ]{Style.RESET_ALL}"
+
+        print(f"  CONFIDENCE INDEX  : [{bar}] {status_txt}")
+
+    def report_sentiment_score(self):
+        print("\n===== ANALYST SENTIMENT SCORE =====")
+        score = getattr(self.analysis, "analyst_sentiment_score", getattr(self.analysis, "sentiment_score", 0))
+
+        if score >= 80:
+            print(f"{Fore.GREEN}● Bardzo silny byczy konsensus analityków")
+        elif score >= 65:
+            print(f"{Fore.YELLOW}● Pozytywne nastawienie Wall Street")
+        elif score >= 50:
+            print(f"{Fore.WHITE}● Neutralny sentyment analityków")
+        else:
+            print(f"{Fore.RED}● Negatywny konsensus / Słaby potencjał")
+
+        print(f"Wynik: {score}/100\n")
+
+        reasons = getattr(self.analysis, "analyst_sentiment_reasons", getattr(self.analysis, "sentiment_reasons", []))
+        for reason in reasons:
+            pts = reason.get("points", 0)
+            sign = "+" if pts > 0 else ""
+            print(f"{sign}{pts:2d} pkt | {reason.get('text', '')}")
+
+    def report_fundamental_score(self):
+        print("\n====== FUNDAMENTAL SCORE ======")
+        score = getattr(self.analysis, "fundamental_score", 0)
+
+        if score >= 80:
+            print(f"{Fore.GREEN}● Wybitne fundamenty (Świetna wzrostowość i rentowność)")
+        elif score >= 65:
+            print(f"{Fore.YELLOW}● Zdrowa spółka (Dobre wskaźniki fin.)")
+        elif score >= 50:
+            print(f"{Fore.WHITE}● Średnia kondycja finansowa")
+        else:
+            print(f"{Fore.RED}● Zagrożone fundamenty / Wysokie ryzyko")
+
+        print(f"Wynik: {score}/100\n")
+
+        for reason in getattr(self.analysis, "fundamental_reasons", []):
+            pts = reason.get("points", 0)
+            sign = "+" if pts > 0 else ""
+            print(f"{sign}{pts:2d} pkt | {reason.get('text', '')}")
 
     def report_quality_score(self):
         print("\n====== QUALITY SCORE ======")
         score = getattr(self.analysis, "quality_score", 0)
 
         if score >= 80:
-            print(f"{Fore.GREEN}● Top okazja (Silny trend, wysoka jakość)")
+            print(f"{Fore.GREEN}● Top okazja techniczna (Silny trend, układ byczy)")
         elif score >= 65:
-            print(f"{Fore.YELLOW}● Dobra spółka (Solidny układ, warta uwagi)")
+            print(f"{Fore.YELLOW}● Dobra struktura wykresu")
         elif score >= 50:
-            print(f"{Fore.WHITE}● Neutralna / Średniak")
+            print(f"{Fore.WHITE}● Neutralna / Konsolidacja")
         else:
-            print(f"{Fore.RED}● Słaba / Omijaj")
+            print(f"{Fore.RED}● Słaby trend / Omijaj")
 
         print(f"Wynik: {score}/100\n")
 
@@ -288,13 +363,22 @@ class Report:
 
     def report_trade(self):
         print("\n=========== TRADE ==========")
-        signal = getattr(self.analysis, "trade_signal", "NEUTRAL")
+
+        confidence = getattr(self.analysis, "confidence", 0) or 0
         rr = getattr(self.analysis, "risk_reward", None)
         sl = getattr(self.analysis, "stop_loss", None)
         tp = getattr(self.analysis, "take_profit", None)
 
+        if confidence >= 80:
+            signal = f"{Fore.GREEN}BUY (Strong Setup){Style.RESET_ALL}"
+        elif confidence >= 60:
+            signal = f"{Fore.YELLOW}ACCUMULATE / WATCH{Style.RESET_ALL}"
+        else:
+            signal = f"{Fore.RED}AVOID / NO TRADE{Style.RESET_ALL}"
+
         print(f"Signal      : {signal}")
-        print(f"RR          : {rr:.2f}" if rr is not None else "RR          : N/A")
+        print(f"Confidence  : {confidence:.1f}%")
+        print(f"RR Ratio    : {interp.interpret_risk_reward(rr)}")
         print(
             f"Stop Loss   : {sl:.2f} {self.currency}"
             if sl is not None
@@ -309,13 +393,9 @@ class Report:
     def report_checklist(self):
         print("\n======== CHECKLIST ========")
 
-        rr = getattr(self.analysis, "risk_reward", None)
-        rsi = getattr(self.analysis, "rsi", None)
-        trend = getattr(self.analysis, "trend", {}) or {}
-
-        t_code = trend.get("trend", "N/A")
-        t_desc = trend.get("desc", "")
-
+        trend_dict = getattr(self.analysis, "trend", {}) or {}
+        t_code = trend_dict.get("trend", "N/A")
+        t_desc = trend_dict.get("desc", "")
         self._line(
             t_code in ("UP", "STRONG_UP"),
             f"Trend wzrostowy: {t_code} ({t_desc})",
@@ -328,14 +408,35 @@ class Report:
                 f"Cena powyżej EMA20 ({ema20:.2f} {self.currency})",
             )
 
+        quality_reasons = getattr(self.analysis, "quality_reasons", [])
+        macd_reason = next(
+            (
+                r["text"]
+                for r in quality_reasons
+                if "MACD" in r.get("text", "").upper()
+            ),
+            None,
+        )
+
         macd = getattr(self.analysis, "macd", None)
         macd_sig = getattr(self.analysis, "macd_signal", None)
-        if macd is not None and macd_sig is not None:
-            self._line(macd > macd_sig, "MACD powyżej linii Signal (Byczy sygnał)")
 
+        if macd_reason:
+            is_macd_ok = macd is not None and macd_sig is not None and macd > macd_sig
+            self._line(is_macd_ok, f"MACD: {macd_reason}")
+        elif macd is not None and macd_sig is not None:
+            is_macd_ok = macd > macd_sig
+            status_txt = "powyżej" if is_macd_ok else "poniżej"
+            self._line(
+                is_macd_ok,
+                f"MACD ({macd:.3f}) {status_txt} linii Signal ({macd_sig:.3f})",
+            )
+
+        rsi = getattr(self.analysis, "rsi", None)
         if rsi is not None:
             self._line(rsi < 70, f"RSI nieprzegrzany (RSI = {rsi:.1f})")
 
+        rr = getattr(self.analysis, "risk_reward", None)
         self._line(
             rr is not None and rr >= 2.0,
             f"Akceptowalny stosunek Zysk/Ryzyko (RR = {rr:.2f})"
@@ -343,30 +444,13 @@ class Report:
             else "RR nieokreślone / zbyt niskie",
         )
 
-    def report_fundamentals(self):
-        """Nowa sekcja w konsoli ze szczegółami fundamentów."""
-        print("\n======== FUNDAMENTALS & TARGETS ========")
-        target = getattr(self.analysis, "target_mean_price", None)
-        rec = getattr(self.analysis, "recommendation_key", "N/D")
-        pe = getattr(self.analysis, "pe_ratio", None)
-        roe = getattr(self.analysis, "roe", None)
-        div = getattr(self.analysis, "dividend_yield", None)
-
-        pe_str = f"{pe:.2f}" if pe else "N/D"
-        roe_str = f"{roe*100:.1f}%" if roe is not None else "N/D"
-        div_str = f"{div:.1f}%" if div is not None else "N/D"
-        target_str = f"{target:.2f} {self.currency}" if target else "N/D"
-
-        print(f"Target Analityków : {target_str}")
-        print(f"Konsensus         : {str(rec).upper()}")
-        print(f"P/E: {pe_str:<12} ROE: {roe_str:<12} Dywidenda: {div_str}")
-        print(f"Fund. Score       : {getattr(self.analysis, 'fundamental_score', 0)}/100")
-
     def report_foter(self):
         print("\n" + "#" * 112)
         print("⚠️ Disclaimer: For informational and educational purposes only. Not financial advice.")
-        print(" Investments carry risk of loss — if you win, share the gains; if you lose, it's on you — use at your own risk. \
-              \n Project code: https://github.com/jarok2013-sudo/stock-analyzer ⚠️")
+        print(
+            " Investments carry risk of loss — if you win, share the gains; if you lose, it's on you — use at your own risk.\n"
+            " Project code: https://github.com/jarok2013-sudo/stock-analyzer ⚠️"
+        )
         print("#" * 112)
 
     @staticmethod
