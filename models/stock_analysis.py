@@ -63,12 +63,20 @@ class StockAnalysis:
         self.macd = None
         self.macd_signal = None
         self.histogram = None
+
+        self.prev_macd = None
+        self.prev_macd_signal = None
+
         self.prev_histogram = None
         self.macd_above_signal = False
         self.histogram_rising = False
         self.atr = None
         self.vol_ratio = 1.0
         self.adx = None
+        self.plus_di = None
+        self.minus_di = None
+        self.prev_plus_di = None
+        self.prev_minus_di = None
 
         # Stochastic
         self.stoch_k = None
@@ -209,9 +217,13 @@ class StockAnalysis:
         self.rsi = float(rsi_val) if rsi_val is not None and not pd.isna(rsi_val) else None
 
         # 3. MACD
+        # Bieżąca świeca (ostatnia)
         self.macd = float(last_row.get("MACD", 0.0)) if not pd.isna(last_row.get("MACD")) else None
         self.macd_signal = float(last_row.get("MACD_signal", 0.0)) if not pd.isna(last_row.get("MACD_signal")) else None
         self.histogram = float(last_row.get("MACD_hist", 0.0)) if not pd.isna(last_row.get("MACD_hist")) else None
+        # 2. Poprzednia świeca (przedostatnia) - WYMAGANE DLA FRESH CROSS
+        self.prev_macd = float(prev_row.get("MACD", 0.0)) if "MACD" in prev_row and not pd.isna(prev_row.get("MACD")) else None
+        self.prev_macd_signal = float(prev_row.get("MACD_signal", 0.0)) if "MACD_signal" in prev_row and not pd.isna(prev_row.get("MACD_signal")) else None
 
         prev_hist = prev_row.get("MACD_hist")
         self.prev_histogram = float(prev_hist) if prev_hist is not None and not pd.isna(prev_hist) else 0.0
@@ -224,6 +236,25 @@ class StockAnalysis:
         self.vol_ratio = float(last_row["vol_ratio"]) if "vol_ratio" in last_row and not pd.isna(last_row["vol_ratio"]) else 1.0
         self.adx = float(last_row["ADX"]) if "ADX" in last_row and not pd.isna(last_row["ADX"]) else None
 
+        self.plus_di = float(last_row["DIP"]) if "DIP" in last_row and not pd.isna(last_row["DIP"]) else None
+        self.minus_di = float(last_row["DIN"]) if "DIN" in last_row and not pd.isna(last_row["DIN"]) else None
+        # ============================================================
+        # DI — POPRZEDNIA ŚWIECA
+        # ============================================================
+
+        self.prev_plus_di = (
+            float(prev_row["DIP"])
+            if "DIP" in prev_row
+            and not pd.isna(prev_row["DIP"])
+            else None
+        )
+
+        self.prev_minus_di = (
+            float(prev_row["DIN"])
+            if "DIN" in prev_row
+            and not pd.isna(prev_row["DIN"])
+            else None
+        )
         # 5. STOCHASTIC
         self.stoch_k = float(last_row["STOCH_k"]) if "STOCH_k" in last_row and not pd.isna(last_row["STOCH_k"]) else None
         self.stoch_d = float(last_row["STOCH_d"]) if "STOCH_d" in last_row and not pd.isna(last_row["STOCH_d"]) else None

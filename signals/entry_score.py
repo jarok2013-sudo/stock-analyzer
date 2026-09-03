@@ -1,10 +1,9 @@
-
 """
 dwuwarstwowy system decyzyjny używany przez profesjonalny trading algorytmiczny:
 Quality Score >= 75-80 $\rightarrow$ Skaner tworzy listę obserwacyjną ("To są świetne spółki z silnym trendem").
 Entry Score >= 80-85 $\rightarrow$ Skaner wyrzuca natychmiastowy alert transakcyjny ("I właśnie w tej sekundzie masz idealny punkt do zajęcia pozycji z małym ryzykiem").
 
-Przedział,Kolor,Stan / Sygnał,Co oznacza w praktyce?
+Przedział,Kolor,Stan / Sygnał,Co oznacza w practicale?
 85 – 100+ pkt,🟢 Zielony,KUPUJ / SPUST POLUZOWANY,"Idealny moment: Świetny R/R (≥2.5-3.0), cena na wsparciu/BB, potwierdzony wolumen i wyzwalacz (MACD/Stoch)."
 65 – 84 pkt,🟡 Żółty,OBSERWUJ / GOTOWOŚĆ,"Przyzwoite wejście, ale brakuje wyzwalacza (np. MACD jeszcze nie opadł) lub wolumen jest przeciętny."
 45 – 64 pkt,⚪ Szary,NEUTRALNY / SPASUJ,Słaby R/R lub cena zbyt daleko od poziomów obronnych (SL musiałby być zbyt szeroki).
@@ -81,7 +80,7 @@ def calculate_entry_score(analysis):
 
         R/R              35 pkt
         Proximity        25 pkt
-        Trigger          30 pkt
+        Trigger          30 pkt (MACD: 20, Stoch: 5, ADX: 5)
         Volume           10 pkt
         -----------------------
                          100 pkt
@@ -89,22 +88,6 @@ def calculate_entry_score(analysis):
 
     score = 0
     reasons = []
-
-    # --------------------------------------------------------
-    # R/R
-    # --------------------------------------------------------
-
-    rr = getattr(analysis, "risk_reward", None)
-
-    if rr is None or pd.isna(rr):
-        add_reason(
-            reasons,
-            "Risk/Reward",
-            0,
-            "Brak możliwości wyliczenia R/R.",
-        )
-
-        return 0, reasons
 
     # --------------------------------------------------------
     # POSZCZEGÓLNE KOMPONENTY
@@ -124,10 +107,16 @@ def calculate_entry_score(analysis):
         reasons.extend(msgs)
 
     # --------------------------------------------------------
-    # OGRANICZENIE DO 0-100
+    # TWARDY WARUNEK TRADINGOWY: Brak R/R = Brak pozycji
     # --------------------------------------------------------
-
-    final_score = max(0, min(100, int(score)))
+    rr = _safe_number(getattr(analysis, "risk_reward", None))
+    if rr is None or rr <= 0:
+        final_score = 0
+    else:
+        # --------------------------------------------------------
+        # OGRANICZENIE DO 0-100
+        # --------------------------------------------------------
+        final_score = max(0, min(100, int(score)))
 
     return final_score, reasons
 
@@ -235,13 +224,19 @@ def score_entry_proximity(analysis):
     """
     Maksimum: 25 pkt
 
-    Priorytet:
+    Składniki:
+
+        lokalizacja ceny       20 pkt
+        siła wsparcia/retest    2 pkt
+        Bollinger Squeeze        3 pkt
+        ----------------------------
+                              25 pkt
+
+    Priorytet lokalizacji:
 
         1. wsparcie
         2. EMA20
         3. dolna Bollinger Band
-
-    + dodatkowo 5 pkt za Bollinger Squeeze.
     """
 
     score = 0
@@ -285,6 +280,10 @@ def score_entry_proximity(analysis):
         25,
     )
 
+    # --------------------------------------------------------
+    # Bezpieczna cena
+    # --------------------------------------------------------
+
     if price is None or price <= 0:
 
         add_reason(
@@ -296,9 +295,9 @@ def score_entry_proximity(analysis):
 
         return 0, reasons
 
-    # ========================================================
-    # ODLEGŁOŚĆ OD WSPARCIA
-    # ========================================================
+    # --------------------------------------------------------
+    # Odległość od wsparcia
+    # --------------------------------------------------------
 
     dist_support = None
     touches = 1
@@ -321,19 +320,20 @@ def score_entry_proximity(analysis):
                 / price
             ) * 100
 
-            # Używamy "touches", bo tego pola
-            # używa system stref wsparcia.
+            # NIE ZMIENIAMY NAZWY "touches"
             raw_touches = support.get("touches")
 
             if raw_touches is not None:
+
                 try:
                     touches = int(raw_touches)
+
                 except (TypeError, ValueError):
                     touches = 1
 
-    # ========================================================
-    # ODLEGŁOŚĆ OD EMA20
-    # ========================================================
+    # --------------------------------------------------------
+    # Odległość od EMA20
+    # --------------------------------------------------------
 
     dist_ema20 = None
 
@@ -345,16 +345,121 @@ def score_entry_proximity(analysis):
         ) * 100
 
     # ========================================================
-    # 1. WSPARCIE
+    # LOKALIZACJA CENY — MAX 20 PKT
     # ========================================================
+
+    location_points = 0
+
+    # --------------------------------------------------------
+    # 1. WSPARCIE
+    # --------------------------------------------------------
 
     if (
         dist_support is not None
-        and -0.5 <= dist_support <= max_dist
+        and 0 <= dist_support <= max_dist
     ):
 
-        bonus_strength = 0
-        bonus_msg = ""
+        location_points = 20
+
+        add_reason(
+            reasons,
+            "Proximity",
+            location_points,
+            (
+                f"Cena blisko wsparcia "
+                f"({dist_support:.2f}%)"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 2. EMA20
+    # --------------------------------------------------------
+
+    elif (
+        dist_ema20 is not None
+        and dist_ema20 <= 2.0
+    ):
+
+        location_points = 16
+
+        add_reason(
+            reasons,
+            "Proximity",
+            location_points,
+            (
+                f"Cena blisko EMA20 "
+                f"(odchylenie {dist_ema20:.2f}%)"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 3. EMA20 2-4%
+    # --------------------------------------------------------
+
+    elif (
+        dist_ema20 is not None
+        and 2.0 < dist_ema20 <= 4.0
+    ):
+
+        location_points = 6
+
+        add_reason(
+            reasons,
+            "Proximity",
+            location_points,
+            (
+                f"Cena umiarkowanie oddalona "
+                f"od EMA20 ({dist_ema20:.2f}%)"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 4. DOLNA BOLLINGER BAND
+    # --------------------------------------------------------
+
+    elif (
+        bb_lower is not None
+        and price <= bb_lower * 1.01
+    ):
+
+        location_points = 14
+
+        add_reason(
+            reasons,
+            "Proximity",
+            location_points,
+            (
+                f"Test dolnej Bollinger Band "
+                f"({bb_lower:.2f})"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 5. BRAK DOBREJ LOKALIZACJI
+    # --------------------------------------------------------
+
+    else:
+
+        add_reason(
+            reasons,
+            "Proximity",
+            0,
+            (
+                "Cena znajduje się zbyt daleko "
+                "od dobrego poziomu wejścia."
+            ),
+        )
+
+    score += location_points
+
+    # ========================================================
+    # SIŁA WSPARCIA / RETEST — MAX 2 PKT
+    # ========================================================
+
+    strength_points = 0
+    strength_msg = None
+
+    if dist_support is not None:
 
         is_near_ath = bool(
             getattr(
@@ -365,136 +470,53 @@ def score_entry_proximity(analysis):
         )
 
         # ----------------------------------------------------
-        # ATH / retest wybicia
+        # Retest poziomu wybicia w pobliżu ATH
         # ----------------------------------------------------
 
         if is_near_ath:
 
             if touches <= 2:
-                bonus_strength = 3
-                bonus_msg = (
-                    " [retest poziomu wybicia]"
+
+                strength_points = 2
+
+                strength_msg = (
+                    "Retest poziomu wybicia "
+                    f"({touches} touches)"
                 )
 
         # ----------------------------------------------------
-        # Normalna strefa wsparcia
+        # Mocna strefa wsparcia
         # ----------------------------------------------------
 
         else:
 
             if touches >= 4:
-                bonus_strength = 3
-                bonus_msg = (
-                    f" [silna strefa: {touches} testów]"
+
+                strength_points = 2
+
+                strength_msg = (
+                    f"Silna strefa wsparcia "
+                    f"({touches} touches)"
                 )
 
-        total_points = min(
-            max_points,
-            max_points + bonus_strength,
-        )
+    if strength_points > 0:
 
-        score += total_points
+        score += strength_points
 
         add_reason(
             reasons,
             "Proximity",
-            total_points,
-            (
-                f"Cena blisko wsparcia "
-                f"({dist_support:.2f}%)"
-                f"{bonus_msg}"
-            ),
+            strength_points,
+            strength_msg,
         )
 
     # ========================================================
-    # 2. EMA20
-    # ========================================================
-
-    elif (
-        dist_ema20 is not None
-        and dist_ema20 <= 2.0
-    ):
-
-        points = int(max_points * 0.80)
-
-        score += points
-
-        add_reason(
-            reasons,
-            "Proximity",
-            points,
-            (
-                f"Cena blisko EMA20 "
-                f"(odchylenie {dist_ema20:.2f}%)"
-            ),
-        )
-
-    # ========================================================
-    # 3. EMA20 2-4%
-    # ========================================================
-
-    elif (
-        dist_ema20 is not None
-        and 2.0 < dist_ema20 <= 4.0
-    ):
-
-        points = int(max_points * 0.30)
-
-        score += points
-
-        add_reason(
-            reasons,
-            "Proximity",
-            points,
-            (
-                f"Cena umiarkowanie oddalona "
-                f"od EMA20 ({dist_ema20:.2f}%)"
-            ),
-        )
-
-    # ========================================================
-    # 4. DOLNA BOLLINGER BAND
-    # ========================================================
-
-    elif (
-        bb_lower is not None
-        and price <= bb_lower * 1.01
-    ):
-
-        points = int(max_points * 0.70)
-
-        score += points
-
-        add_reason(
-            reasons,
-            "Proximity",
-            points,
-            (
-                f"Test dolnej Bollinger Band "
-                f"({bb_lower:.2f})"
-            ),
-        )
-
-    # ========================================================
-    # 5. BRAK DOBREJ LOKALIZACJI
-    # ========================================================
-
-    else:
-
-        add_reason(
-            reasons,
-            "Proximity",
-            0,
-            "Cena znajduje się zbyt daleko od dobrego poziomu wejścia.",
-        )
-
-    # ========================================================
-    # BOLLINGER SQUEEZE
+    # BOLLINGER SQUEEZE — MAX 3 PKT
     # ========================================================
 
     if bb_squeeze:
 
-        squeeze_points = 5
+        squeeze_points = 3
 
         score += squeeze_points
 
@@ -504,11 +526,15 @@ def score_entry_proximity(analysis):
             squeeze_points,
             (
                 "Bollinger Squeeze - "
-                "spadek zmienności przed możliwym wybiciem"
+                "spadek zmienności przed możliwym wybiciem."
             ),
         )
 
-    return score, reasons
+    # ========================================================
+    # OGRANICZENIE PROXIMITY DO 25 PKT
+    # ========================================================
+
+    return min(max_points, score), reasons
 
 
 # ============================================================
@@ -525,8 +551,8 @@ def score_entry_trigger(analysis):
     Stochastic:
          5 pkt
 
-    Przyszłościowo:
-        +5 pkt ADX/DI
+    ADX/DI confirmation:
+         5 pkt
     """
 
     score = 0
@@ -764,7 +790,33 @@ def score_entry_trigger(analysis):
         )
 
     # ========================================================
-    # OGRANICZENIE TRIGGERA
+    # ADX / DI CONFIRMATION
+    # ========================================================
+
+    adx = _safe_number(getattr(analysis, "adx", None))
+    plus_di = _safe_number(getattr(analysis, "plus_di", None))
+    minus_di = _safe_number(getattr(analysis, "minus_di", None))
+
+    if adx is not None and plus_di is not None and minus_di is not None:
+        if adx >= 20 and plus_di > minus_di:
+            adx_pts = 5
+            score += adx_pts
+            add_reason(
+                reasons,
+                "Trigger",
+                adx_pts,
+                f"Potwierdzenie trendu ADX ({adx:.1f}) oraz +DI > -DI.",
+            )
+        else:
+            add_reason(
+                reasons,
+                "Trigger",
+                0,
+                "Brak potwierdzenia siły trendu ADX/DI.",
+            )
+
+    # ========================================================
+    # OGRANICZENIE TRIGGERA (MAX 30)
     # ========================================================
 
     score = min(score, 30)
