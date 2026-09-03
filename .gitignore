@@ -27,6 +27,7 @@ venv/
 #raport
 !reports/
 !reports/pdf_generator.py
+!reports/report.py
 
 #scoring
 !scoring/
