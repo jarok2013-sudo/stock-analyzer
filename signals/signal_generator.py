@@ -32,8 +32,6 @@ class SignalGenerator:
 
         self.analysis = analysis
 
-   
-    #def determine_signal(self):
 
        
     
@@ -69,7 +67,7 @@ class SignalGenerator:
         ):
             return "WAIT"
 
-        if e >= WATCH_ENTRY_SCORE:
+        if e >= WATCH_ENTRY_SCORE and q >= 50: # zabezpieczenie przed sygmałem WATCH przy niskiej jakości
             return "WATCH"
 
         return "AVOID"

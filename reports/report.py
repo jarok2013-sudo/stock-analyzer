@@ -1,6 +1,6 @@
 from colorama import Fore, Style, init
 import pandas as pd
-from utils.func import fmt_float
+from utils.func import fmt_float, _safe_number
 from utils import interpreter as interp
 
 init(autoreset=True)
@@ -87,19 +87,37 @@ class Report:
 
         levels = []
 
-        target_p = getattr(analysis, "target_mean_price", None)
-        if target_p:
-            dist_target = ((target_p - price) / price) * 100
-            levels.append({
-                "price": target_p,
-                "label_raw": "🎯 TARGET ANALITYKÓW",
-                "color": Fore.MAGENTA,
-                "detail": f"Potencjał: {dist_target:+.2f}%",
-                "type": "TARGET",
-            })
+        # 1. TARGETY ANALITYKÓW (z dynamicznym wyróżnieniem statusu)
+        target_defs = [
+            ("targetHighPrice", "🏛️ TARGET MAX (Analitycy)", "MAX"),
+            ("targetMeanPrice", "🏛️ TARGET ŚREDNI (Analitycy)", "AVG"),
+            ("targetLowPrice", "🏛️ TARGET MIN (Analitycy)", "MIN"),
+        ]
 
+        for key, label_base, t_type in target_defs:
+            t_price = self.info.get(key, None)
+            if t_price is not None and t_price > 0:
+                dist_target = ((t_price - price) / price) * 100
+                
+                # Dostosowanie ikony i opisu w zależności od tego, czy target jest powyżej czy poniżej ceny
+                if t_price >= price:
+                    detail_str = f"Potencjał: +{dist_target:.2f}%"
+                    label_str = label_base
+                else:
+                    detail_str = f"Cena wyżej o: {abs(dist_target):.2f}%"
+                    label_str = label_base.replace("🏛️", "⚠️")  # Ostrzeżenie: cena wyprzedza target
+
+                levels.append({
+                    "price": t_price,
+                    "label_raw": label_str,
+                    "color": Fore.MAGENTA,
+                    "detail": detail_str,
+                    "type": "TARGET",
+                })
+
+        # 2. NAJBLIŻSZY OPÓR (Nad ceną)
         res = getattr(analysis, "nearest_resistance", None)
-        if res and res.get("price"):
+        if res and res.get("price") and res["price"] > price:
             res_p = res["price"]
             tests = res.get("touches", 1)
             dist = getattr(analysis, "resistance_distance", 0)
@@ -107,10 +125,34 @@ class Report:
                 "price": res_p,
                 "label_raw": f"🔴 OPÓR (Resistance) [{tests}x]",
                 "color": Fore.RED,
-                "detail": f"Odstęp: {dist:.2f}%",
+                "detail": f"Odstęp: +{dist:.2f}%",
                 "type": "RESISTANCE",
             })
 
+        # 3. PRZEBITE OPORY / STREFY RE-TESTU (Pod ceną)
+        rated_resistances = getattr(analysis, "rated_resistances", [])
+        broken = [
+            r for r in rated_resistances
+            if isinstance(r, dict) and r.get("price") and r["price"] < price
+        ]
+        if broken:
+            # Najbliższy przełamany opór pod ceną (np. 156.67 PLN)
+            last_broken = max(broken, key=lambda x: x["price"])
+            b_price = last_broken["price"]
+            dist_b = ((price - b_price) / price) * 100
+            
+            # Zapobiegamy dublowaniu, jeśli ten sam poziom jest oznaczony jako główne wsparcie
+            supp_price = getattr(analysis, "nearest_support", {}).get("price") if getattr(analysis, "nearest_support", None) else None
+            if not supp_price or abs(b_price - supp_price) > 0.01:
+                levels.append({
+                    "price": b_price,
+                    "label_raw": "🟢 WSPARCIE (Dawny Opór/Flip)",
+                    "color": Fore.LIGHTGREEN_EX,
+                    "detail": f"Odstęp: -{dist_b:.2f}%",
+                    "type": "SUPPORT_FLIP",
+                })
+
+        # 4. GŁÓWNE WSPARCIE
         supp = getattr(analysis, "nearest_support", None)
         if supp and supp.get("price"):
             sup_p = supp["price"]
@@ -119,22 +161,24 @@ class Report:
             levels.append({
                 "price": sup_p,
                 "label_raw": f"🟢 WSPARCIE (Support) [{tests}x]",
-                "color": Fore.LIGHTGREEN_EX,
-                "detail": f"Odstęp: {dist:.2f}%",
+                "color": Fore.GREEN,
+                "detail": f"Odstęp: -{dist:.2f}%",
                 "type": "SUPPORT",
             })
 
+        # 5. TAKE PROFIT (TP)
         tp_val = getattr(analysis, "take_profit", None)
         if tp_val is not None:
             dist_tp = ((tp_val - price) / price) * 100
             levels.append({
                 "price": tp_val,
                 "label_raw": "🎯 TAKE PROFIT (TP)",
-                "color": Fore.GREEN,
-                "detail": f"Zysk: +{dist_tp:.2f}%",
+                "color": Fore.LIGHTCYAN_EX,
+                "detail": f"Zysk: {dist_tp:+.2f}%",
                 "type": "TP",
             })
 
+        # 6. STOP LOSS (SL)
         sl_val = getattr(analysis, "stop_loss", None)
         if sl_val is not None:
             dist_sl = ((price - sl_val) / price) * 100
@@ -146,17 +190,20 @@ class Report:
                 "type": "SL",
             })
 
+        # 7. ŚREDNIE EMA
         for ema_name in ["ema20", "ema50", "ema200"]:
             ema_val = getattr(analysis, ema_name, None)
             if ema_val is not None:
+                dist_ema = ((ema_val - price) / price) * 100
                 levels.append({
                     "price": ema_val,
                     "label_raw": f"🔷 {ema_name.upper()}",
                     "color": Fore.CYAN,
-                    "detail": "Średnia",
+                    "detail": f"Średnia ({dist_ema:+.2f}%)",
                     "type": "EMA",
                 })
 
+        # 8. AKTUALNA CENA
         levels.append({
             "price": price,
             "label_raw": "💲 AKTUALNA CENA",
@@ -165,6 +212,7 @@ class Report:
             "type": "PRICE",
         })
 
+        # Sortowanie poziomów od najpotężniejszego (najwyższa cena) do najniższego
         levels.sort(key=lambda x: x["price"], reverse=True)
 
         print("\n" + "=" * 70)
@@ -173,13 +221,16 @@ class Report:
 
         for i, lvl in enumerate(levels):
             p_str = f"{lvl['price']:.2f} {currency}"
-            colored_label = f"{lvl['color']}{lvl['label_raw']:<28}{Style.RESET_ALL}"
+            colored_label = f"{lvl['color']}{lvl['label_raw']:<32}{Style.RESET_ALL}"
+            
             if lvl["type"] == "PRICE":
                 print(f" --->  ►► {colored_label} : {p_str:<12} ({lvl['detail']}) ◄◄")
             else:
                 print(f"       │  {colored_label} : {p_str:<12} ({lvl['detail']})")
+            
             if i < len(levels) - 1:
                 print("       │")
+                
         print("=" * 70)
 
     def report_levels(self):
@@ -210,33 +261,33 @@ class Report:
             )
         )
 
-        print("\n🛡️ POZIOMY WSPARCIA I OPORU:")
+        print("\n🛡 POZIOMY WSPARCIA I OPORU:")
         supp = getattr(self.analysis, "nearest_support", None)
         res = getattr(self.analysis, "nearest_resistance", None)
         dist_s = getattr(self.analysis, "support_distance", None)
         dist_r = getattr(self.analysis, "resistance_distance", None)
 
+        price_val = getattr(self.analysis, "price", None)
+        rated_resistances = getattr(self.analysis, "rated_resistances", [])
+
+        # WSPARCIE
         if supp and supp.get("price"):
             s_price = supp["price"]
             s_touches = supp.get("touches", 1)
-            print(
-                f"  • Najbliższe Wsparcie : {s_price:.2f} {self.currency} [{s_touches}x testy] ➔ Odstęp: {interp.interpret_distance(dist_s, is_support=True)}"
-            )
+            dist_str = interp.interpret_distance(dist_s, is_support=True) if dist_s is not None else "N/A"
+            print(f"  • Najbliższe Wsparcie : {s_price:.2f} {self.currency} [{s_touches}x testy] ➔ Odstęp: {dist_str}")
         else:
             print("  • Najbliższe Wsparcie : BRAK / Nie wyznaczono")
 
-        if res and res.get("is_ath"):
-            print(
-                "  • Najbliższy Opór     : BRAK (Wybicie szczytów / ATH) 🚀 ➔ Otwarta droga do wzrostów"
-            )
-        elif res and res.get("price"):
-            r_price = res["price"]
-            r_touches = res.get("touches", 1)
-            print(
-                f"  • Najbliższy Opór     : {r_price:.2f} {self.currency} [{r_touches}x testy] ➔ Odstęp: {interp.interpret_distance(dist_r, is_support=False)}"
-            )
-        else:
-            print("  • Najbliższy Opór     : Nie wyznaczono")
+        # OPÓR
+        res_info = interp.interpret_resistance(
+            resistance=res,
+            rated_resistances=rated_resistances,
+            price=price_val,
+            resistance_distance=dist_r,
+            currency=self.currency,
+        )
+        print(f"  • Najbliższy Opór     : {res_info}")
 
     def report_total_score(self):
         print("\n========================================================================")
@@ -336,6 +387,27 @@ class Report:
     def report_entry_score(self):
         print("\n======= ENTRY SCORE =======")
         entry_score = getattr(self.analysis, "entry_score", 0)
+        price = getattr(self.analysis, "price", None)
+        res = getattr(self.analysis, "nearest_resistance", None)
+        rated_resistances = getattr(self.analysis, "rated_resistances", [])
+
+        
+        # Wykrycie wybicia oporu / szczytu (ATH)
+        # 1. Filtrujemy opory, które znajdują się strictly NAD aktualną ceną
+        active_resistances_above = [
+            r for r in rated_resistances
+            if isinstance(r, dict) 
+            and _safe_number(r.get("price")) is not None 
+            and _safe_number(r.get("price")) > price
+        ]
+
+        # 2. ATH zachodzi tylko wtedy, gdy NIE MA żadnego oporu nad ceną
+        is_ath = (
+            getattr(self.analysis, "is_ath", False)
+            or (res and res.get("is_ath", False))
+            or (len(active_resistances_above) == 0)
+        )
+        
 
         if entry_score >= 80:
             print(
@@ -350,9 +422,14 @@ class Report:
                 f"{Fore.WHITE}● NEUTRALNY / SPASUJ (Słaby moment na naciśnięcie spustu)"
             )
         else:
-            print(
-                f"{Fore.RED}● ZAKAZ WEJŚCIA (Zły moment, wysokie ryzyko / kupno pod oporem)"
-            )
+            if is_ath:
+                print(
+                    f"{Fore.RED}● ZAKAZ WEJŚCIA (Wykupienie / Ryzyko korekty po wybiciu ATH)"
+                )
+            else:
+                print(
+                    f"{Fore.RED}● ZAKAZ WEJŚCIA (Zły moment, wysokie ryzyko / kupno pod oporem)"
+                )
 
         print(f"Wynik: {entry_score}/100\n")
 

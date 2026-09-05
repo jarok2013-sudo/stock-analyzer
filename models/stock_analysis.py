@@ -12,7 +12,7 @@ from database import save_instrument, should_update, _load_fundamentals_from_db
 from download import get_instrument_info
 from scoring.quality_score import calculate_quality_score
 from scoring.trend import get_trend
-from scoring.fundamantal_score import calculate_fundamental_score
+from scoring.fundamental_score import calculate_fundamental_score
 from scoring.analyst_sentiment import calculate_analyst_sentiment
 
 from signals.entry_score import calculate_entry_score
@@ -116,11 +116,6 @@ class StockAnalysis:
         self.nearest_resistance = None
         self.support_distance = None
         self.resistance_distance = None
-
-        # Ocena techniczna vs fundamentalna
-        # self.technical_quality_score = 0
-        # self.fundamental_score = 0
-        # self.fundamental_details = []
 
         # Wyniki punktowe łączne
         self.rating = ""
@@ -228,8 +223,17 @@ class StockAnalysis:
         prev_hist = prev_row.get("MACD_hist")
         self.prev_histogram = float(prev_hist) if prev_hist is not None and not pd.isna(prev_hist) else 0.0
 
-        self.macd_above_signal = self.macd > self.macd_signal
-        self.histogram_rising = self.histogram > self.prev_histogram
+        self.macd_above_signal = (
+            self.macd is not None
+            and self.macd_signal is not None
+            and self.macd > self.macd_signal
+        )
+
+        self.histogram_rising = (
+            self.histogram is not None
+            and self.prev_histogram is not None
+            and self.histogram > self.prev_histogram
+        )
 
         # 4. ATR, Vol Ratio, ADX
         self.atr = float(last_row["ATR"]) if "ATR" in last_row and not pd.isna(last_row["ATR"]) else None
@@ -315,47 +319,7 @@ class StockAnalysis:
             self.fundamental_reasons
         ) = calculate_fundamental_score(self)
 
-    # def calculate_fundamental_score(self):
-    #     """Pobiera dane fundamentalne z bazy i wylicza Fundamental Score."""
-    #     data = _load_fundamentals_from_db(self.symbol)
-
-    #     if not data:
-    #         return
-
-    #     self.target_mean_price = data.get("targetMeanPrice")
-    #     self.recommendation_key = data.get("recommendationKey", "N/D")
-    #     self.dividend_yield = data.get("dividendYield")
-    #     self.pe_ratio = data.get("trailingPE")
-    #     self.roe = data.get("returnOnEquity")
-
-    #     score = 0
-    #     self.fundamental_details = []
-
-    #     # Ocena P/E
-    #     if self.pe_ratio and 0 < self.pe_ratio < 15:
-    #         score += 25
-    #         self.fundamental_details.append("Niska wycena P/E (<15)")
-    #     elif self.pe_ratio and self.pe_ratio < 25:
-    #         score += 15
-    #         self.fundamental_details.append("Umiarkowana wycena P/E (<25)")
-
-    #     # Ocena ROE
-    #     if self.roe and self.roe >= 0.15:
-    #         score += 25
-    #         self.fundamental_details.append("Wysoki ROE (>=15%)")
-
-    #     # Dywidenda
-    #     if self.dividend_yield and self.dividend_yield >= 0.03:
-    #         score += 25
-    #         div_pct = self.dividend_yield * 100 if self.dividend_yield < 1.0 else self.dividend_yield
-    #         self.fundamental_details.append(f"Atrakcyjna dywidenda ({div_pct:.1f}%)")
-
-    #     # Rekomendacje
-    #     if str(self.recommendation_key).lower() in ["buy", "strong_buy"]:
-    #         score += 25
-    #         self.fundamental_details.append("Rekomendacja KUPUJ")
-
-    #     self.fundamental_score = score
+    
 
     def calculate_analyst_sentiment(self):
         """Wylicza Analyst Sentiment Score 0-100."""
@@ -371,8 +335,6 @@ class StockAnalysis:
             self.quality_reasons
         ) = calculate_quality_score(self)
 
-        #self.technical_quality_score = self.quality_score
-
     def calculate_entry_score(self):
         """Wylicza punktację momentu wejścia."""
         self.entry_score, self.entry_reasons = calculate_entry_score(self)
@@ -384,49 +346,92 @@ class StockAnalysis:
 
     def calculate_confidence(self):
         """
-        Oblicza poziom pewności sygnału na podstawie 4 filarów
-        oraz nakłada filtr twardy (bezpiecznik R/R).
+        Oblicza Confidence na podstawie 4 niezależnych filarów:
+
+            Entry Score        → 35%
+            Quality Score      → 25%
+            Fundamental Score  → 25%
+            Analyst Sentiment  → 15%
+
+        Następnie wynik jest korygowany przez R/R.
+
+        Confidence nie jest sygnałem transakcyjnym.
+        Ostateczny sygnał generuje SignalGenerator.
         """
-        # 1. Pobieramy wartości składowe (domyślnie 0, jeśli brak)
+
+        # ==========================================================
+        # 1. Pobranie wartości poszczególnych filarów
+        # ==========================================================
+
         entry = getattr(self, "entry_score", 0) or 0
         quality = getattr(self, "quality_score", 0) or 0
         fundamental = getattr(self, "fundamental_score", 0) or 0
         sentiment = getattr(self, "analyst_sentiment_score", 0) or 0
-        rr = getattr(self, "risk_reward", 0) or 0
+        rr = getattr(self, "risk_reward", None)
 
-        # 2. BEZPIECZNIK: Brak zdefiniowanego R/R lub ujemne R/R zeruje pewność
-        if rr <= 0 or entry == 0:
+        # ==========================================================
+        # 2. TWARDY BEZPIECZNIK
+        # ==========================================================
+
+        # Brak poprawnego R/R → brak pewności setupu
+        if rr is None or rr <= 0:
             self.confidence = 0.0
             return self.confidence
 
-        # 3. ŚREDNIA WAŻONA (Wagi dostosowane pod Swing Trading)
-        # Entry Score ma najwyższą wagę, bo odpowiada za precyzję wejścia
+        # Brak setupu wejścia → brak pewności
+        if entry <= 0:
+            self.confidence = 0.0
+            return self.confidence
+
+        # ==========================================================
+        # 3. WAGI 4 FILARÓW
+        # ==========================================================
+
         w_entry = 0.35
         w_quality = 0.25
         w_fundamental = 0.25
         w_sentiment = 0.15
 
+        # ==========================================================
+        # 4. ŚREDNIA WAŻONA
+        # ==========================================================
+
         raw_confidence = (
-            (entry * w_entry)
-            + (quality * w_quality)
-            + (fundamental * w_fundamental)
-            + (sentiment * w_sentiment)
+            entry * w_entry
+            + quality * w_quality
+            + fundamental * w_fundamental
+            + sentiment * w_sentiment
         )
 
-        # 4. BONUS / KARA Z TYTUŁU MOCY R/R (Profil Ryzyka)
-        # Bardzo wysokie RR (> 2.5) zwiększa pewność, niskie (< 1.5) ją obniża
+        # ==========================================================
+        # 5. MODYFIKATOR R/R
+        # ==========================================================
+
         rr_modifier = 1.0
+
         if rr >= 3.0:
             # Bardzo dobre R/R
             rr_modifier = 1.05
 
         elif rr < 1.5:
-            rr_modifier = 0.85  # -15% kary
+            # Słabe R/R
+            rr_modifier = 0.85
+
+        # ==========================================================
+        # 6. FINAL CONFIDENCE
+        # ==========================================================
 
         final_confidence = raw_confidence * rr_modifier
 
-        # Ograniczenie wyniku do przedziału <0, 100>
-        self.confidence = round(max(0.0, min(100.0, final_confidence)), 2)
+        # ==========================================================
+        # 7. Ograniczenie do 0–100
+        # ==========================================================
+
+        self.confidence = round(
+            max(0.0, min(100.0, final_confidence)),
+            2
+        )
+
         return self.confidence
 
     def debug_print_analysis(self):

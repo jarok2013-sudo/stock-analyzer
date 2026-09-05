@@ -120,10 +120,15 @@ def calculate_analyst_sentiment(analysis):
 
         score += points
 
+        if analyst_upside_pct < 0:
+            msg = f"Cena powyżej targetu analityków ({analyst_upside_pct:+.1f}%)"
+        else:
+            msg = f"Potencjał do średniego targetu: {analyst_upside_pct:+.1f}%"
+
         _add_reason(
             reasons,
             points,
-            f"Potencjał do średniego targetu: {analyst_upside_pct:+.1f}%"
+            msg
         )
     else:
         _add_reason(

@@ -1,7 +1,4 @@
 """
-dwuwarstwowy system decyzyjny używany przez profesjonalny trading algorytmiczny:
-Quality Score >= 75-80 $\rightarrow$ Skaner tworzy listę obserwacyjną ("To są świetne spółki z silnym trendem").
-Entry Score >= 80-85 $\rightarrow$ Skaner wyrzuca natychmiastowy alert transakcyjny ("I właśnie w tej sekundzie masz idealny punkt do zajęcia pozycji z małym ryzykiem").
 
 Przedział,Kolor,Stan / Sygnał,Co oznacza w practicale?
 85 – 100+ pkt,🟢 Zielony,KUPUJ / SPUST POLUZOWANY,"Idealny moment: Świetny R/R (≥2.5-3.0), cena na wsparciu/BB, potwierdzony wolumen i wyzwalacz (MACD/Stoch)."
@@ -33,7 +30,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
-
+from utils.func import _safe_number
 import config
 
 
@@ -49,23 +46,7 @@ def add_reason(reasons, category, points, text):
     })
 
 
-def _safe_number(value, default=None):
-    """
-    Bezpiecznie konwertuje wartość na float.
-    Na NaN zwraca default.
-    """
-    if value is None:
-        return default
 
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return default
-
-    if pd.isna(value):
-        return default
-
-    return value
 
 
 # ============================================================
@@ -86,6 +67,7 @@ def calculate_entry_score(analysis):
                          100 pkt
     """
 
+    
     score = 0
     reasons = []
 
@@ -226,22 +208,30 @@ def score_entry_proximity(analysis):
 
     Składniki:
 
-        lokalizacja ceny       20 pkt
-        siła wsparcia/retest    2 pkt
-        Bollinger Squeeze        3 pkt
+        lokalizacja ceny / retest  20 pkt
+        siła wsparcia/retest        2 pkt
+        Bollinger Squeeze           3 pkt
         ----------------------------
-                              25 pkt
+                                   25 pkt
 
     Priorytet lokalizacji:
 
-        1. wsparcie
-        2. EMA20
-        3. dolna Bollinger Band
+        1. retest przełamanego oporu (zamiana ról: opór -> wsparcie)
+        2. wsparcie (standardowe)
+        3. spadek pod wsparcie (brak obrony / wyłamanie)
+        4. EMA20 (do 2%)
+        5. EMA20 (2-4%)
+        6. dolna Bollinger Band
     """
 
     score = 0
     reasons = []
+    info = getattr(analysis, "instrument_info", {}) or {}
+    currency = info.get("currency", "PLN")
 
+    # --------------------------------------------------------
+    # Pobranie parametrów ceny i poziomów technicznych
+    # --------------------------------------------------------
     price = _safe_number(
         getattr(analysis, "price", None)
     )
@@ -250,6 +240,18 @@ def score_entry_proximity(analysis):
         analysis,
         "nearest_support",
         None,
+    )
+
+    rated_resistances = getattr(
+        analysis,
+        "rated_resistances",
+        [],
+    )
+
+    rated_supports = getattr(
+        analysis,
+        "rated_supports",
+        [],
     )
 
     ema20 = _safe_number(
@@ -283,27 +285,22 @@ def score_entry_proximity(analysis):
     # --------------------------------------------------------
     # Bezpieczna cena
     # --------------------------------------------------------
-
     if price is None or price <= 0:
-
         add_reason(
             reasons,
             "Proximity",
             0,
             "Brak aktualnej ceny.",
         )
-
         return 0, reasons
 
     # --------------------------------------------------------
     # Odległość od wsparcia
     # --------------------------------------------------------
-
     dist_support = None
     touches = 1
 
     if isinstance(support, dict):
-
         support_price = _safe_number(
             support.get("price")
         )
@@ -312,7 +309,6 @@ def score_entry_proximity(analysis):
             support_price is not None
             and support_price > 0
         ):
-
             # dodatnie = cena NAD wsparciem
             # ujemne = cena POD wsparciem
             dist_support = (
@@ -324,43 +320,75 @@ def score_entry_proximity(analysis):
             raw_touches = support.get("touches")
 
             if raw_touches is not None:
-
                 try:
                     touches = int(raw_touches)
-
                 except (TypeError, ValueError):
                     touches = 1
 
     # --------------------------------------------------------
     # Odległość od EMA20
     # --------------------------------------------------------
-
     dist_ema20 = None
 
     if ema20 is not None and ema20 > 0:
-
         dist_ema20 = (
             abs(price - ema20)
             / ema20
         ) * 100
 
+    # --------------------------------------------------------
+    # Wykrywanie przełamanych poziomów (Zasada Zamiany Ról)
+    # --------------------------------------------------------
+    # Szukamy oporów pod ceną (przebite opory stające się wsparciem)
+    broken_resistances = [
+        r for r in rated_resistances
+        if isinstance(r, dict) and _safe_number(r.get("price")) is not None and _safe_number(r.get("price")) < price
+    ]
+
+    # Szukamy wsparć nad ceną (przełamane wsparcia stające się oporem)
+    broken_supports = [
+        s for s in rated_supports
+        if isinstance(s, dict) and _safe_number(s.get("price")) is not None and _safe_number(s.get("price")) > price
+    ]
+
     # ========================================================
     # LOKALIZACJA CENY — MAX 20 PKT
     # ========================================================
-
     location_points = 0
+    is_retest = False
 
     # --------------------------------------------------------
-    # 1. WSPARCIE
+    # 1. RETEST PRZEBITEGO OPORU (Zasada zamiany ról)
     # --------------------------------------------------------
+    if broken_resistances:
+        last_broken_res = max(
+            broken_resistances,
+            key=lambda x: _safe_number(x.get("price"))
+        )
+        broken_res_price = _safe_number(last_broken_res.get("price"))
+        dist_broken_res = ((price - broken_res_price) / price) * 100.0
 
-    if (
+        if 0 <= dist_broken_res <= max_dist:
+            location_points = 20
+            is_retest = True
+            add_reason(
+                reasons,
+                "Proximity",
+                location_points,
+                (
+                    f"Retest wybitego oporu ({broken_res_price:.2f} {currency}) — "
+                    f"dawny opór stał się wsparciem (+{dist_broken_res:.2f}%)"
+                ),
+            )
+
+    # --------------------------------------------------------
+    # 2. WSPARCIE (STANDARDOWE)
+    # --------------------------------------------------------
+    elif (
         dist_support is not None
         and 0 <= dist_support <= max_dist
     ):
-
         location_points = 20
-
         add_reason(
             reasons,
             "Proximity",
@@ -372,16 +400,39 @@ def score_entry_proximity(analysis):
         )
 
     # --------------------------------------------------------
-    # 2. EMA20
+    # 3. SPADEK PONIŻEJ WSPARCIA (WYŁAMANIE DÓŁ)
     # --------------------------------------------------------
+    elif (
+        broken_supports
+        and dist_support is None
+    ):
+        last_broken_supp = min(
+            broken_supports,
+            key=lambda x: _safe_number(x.get("price"))
+        )
+        broken_supp_price = _safe_number(last_broken_supp.get("price"))
+        dist_below = ((broken_supp_price - price) / price) * 100.0
 
+        if dist_below <= 3.0:
+            location_points = 0
+            add_reason(
+                reasons,
+                "Proximity",
+                0,
+                (
+                    f"Cena wyłamała wsparcie w dół ({broken_supp_price:.2f} {currency}) — "
+                    f"brak obrony (-{dist_below:.2f}%)"
+                ),
+            )
+
+    # --------------------------------------------------------
+    # 4. EMA20 (BLISKO DO 2%)
+    # --------------------------------------------------------
     elif (
         dist_ema20 is not None
         and dist_ema20 <= 2.0
     ):
-
         location_points = 16
-
         add_reason(
             reasons,
             "Proximity",
@@ -393,16 +444,13 @@ def score_entry_proximity(analysis):
         )
 
     # --------------------------------------------------------
-    # 3. EMA20 2-4%
+    # 5. EMA20 (UMIARKOWANIE 2-4%)
     # --------------------------------------------------------
-
     elif (
         dist_ema20 is not None
         and 2.0 < dist_ema20 <= 4.0
     ):
-
         location_points = 6
-
         add_reason(
             reasons,
             "Proximity",
@@ -414,16 +462,13 @@ def score_entry_proximity(analysis):
         )
 
     # --------------------------------------------------------
-    # 4. DOLNA BOLLINGER BAND
+    # 6. DOLNA BOLLINGER BAND
     # --------------------------------------------------------
-
     elif (
         bb_lower is not None
         and price <= bb_lower * 1.01
     ):
-
         location_points = 14
-
         add_reason(
             reasons,
             "Proximity",
@@ -435,11 +480,9 @@ def score_entry_proximity(analysis):
         )
 
     # --------------------------------------------------------
-    # 5. BRAK DOBREJ LOKALIZACJI
+    # 7. BRAK DOBREJ LOKALIZACJI
     # --------------------------------------------------------
-
     else:
-
         add_reason(
             reasons,
             "Proximity",
@@ -455,54 +498,39 @@ def score_entry_proximity(analysis):
     # ========================================================
     # SIŁA WSPARCIA / RETEST — MAX 2 PKT
     # ========================================================
-
     strength_points = 0
     strength_msg = None
 
-    if dist_support is not None:
+    # Punkty przyznajemy TYLKO wtedy, gdy cena jest w prawidłowej lokalizacji wejściowej
+    if location_points > 0:
+        is_near_ath = bool(getattr(analysis, "is_near_ath", False))
 
-        is_near_ath = bool(
-            getattr(
-                analysis,
-                "is_near_ath",
-                False,
+        # 1. Przypadek retestu wybitego oporu
+        if is_retest:
+            last_broken_res = max(
+                broken_resistances,
+                key=lambda x: _safe_number(x.get("price"))
             )
-        )
+            res_touches = last_broken_res.get("touches", touches)
+            try:
+                res_touches = int(res_touches)
+            except (TypeError, ValueError):
+                res_touches = 1
 
-        # ----------------------------------------------------
-        # Retest poziomu wybicia w pobliżu ATH
-        # ----------------------------------------------------
+            strength_points = 2
+            strength_msg = f"Retest poziomu wybicia ({res_touches} testy)"
 
-        if is_near_ath:
-
-            if touches <= 2:
-
+        # 2. Przypadek standardowego wsparcia
+        elif dist_support is not None:
+            if is_near_ath and touches <= 2:
                 strength_points = 2
-
-                strength_msg = (
-                    "Retest poziomu wybicia "
-                    f"({touches} touches)"
-                )
-
-        # ----------------------------------------------------
-        # Mocna strefa wsparcia
-        # ----------------------------------------------------
-
-        else:
-
-            if touches >= 4:
-
+                strength_msg = f"Retest poziomu wybicia w rejonie ATH ({touches} testy)"
+            elif not is_near_ath and touches >= 4:
                 strength_points = 2
-
-                strength_msg = (
-                    f"Silna strefa wsparcia "
-                    f"({touches} touches)"
-                )
+                strength_msg = f"Silna strefa wsparcia ({touches} testów)"
 
     if strength_points > 0:
-
         score += strength_points
-
         add_reason(
             reasons,
             "Proximity",
@@ -513,13 +541,9 @@ def score_entry_proximity(analysis):
     # ========================================================
     # BOLLINGER SQUEEZE — MAX 3 PKT
     # ========================================================
-
     if bb_squeeze:
-
         squeeze_points = 3
-
         score += squeeze_points
-
         add_reason(
             reasons,
             "Proximity",
@@ -533,7 +557,6 @@ def score_entry_proximity(analysis):
     # ========================================================
     # OGRANICZENIE PROXIMITY DO 25 PKT
     # ========================================================
-
     return min(max_points, score), reasons
 
 

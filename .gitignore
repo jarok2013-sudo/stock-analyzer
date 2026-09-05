@@ -14,6 +14,12 @@ venv/
 
 # Wyklucz z ignorowania tylko te pliki/foldery: 
 !.gitignore
+!config.py
+!database.py
+!download.py
+!main.py
+!scanner.py
+
 
 !models/
 !models/stock_analysis.py
@@ -40,3 +46,14 @@ venv/
 !signals/
 !signals/entry_score.py
 !signals/signal_generator.py
+!signals/trade_levels.py
+
+#utils
+!utils/
+!utils/interpreter.py
+!utils/distance.py
+!utils/func.py
+!utils/indicators.py
+!utils/patterns.py
+!utils/resistance.py
+!utils/supprts.py
