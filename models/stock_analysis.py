@@ -417,7 +417,9 @@ class StockAnalysis:
         # Bardzo wysokie RR (> 2.5) zwiększa pewność, niskie (< 1.5) ją obniża
         rr_modifier = 1.0
         if rr >= 3.0:
-            rr_modifier = 1.05  # +5% premii
+            # Bardzo dobre R/R
+            rr_modifier = 1.05
+
         elif rr < 1.5:
             rr_modifier = 0.85  # -15% kary
 
