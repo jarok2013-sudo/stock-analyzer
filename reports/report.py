@@ -167,11 +167,12 @@ class Report:
             })
 
         # 5. TAKE PROFIT (TP)
-        tp_val = getattr(analysis, "take_profit", None)
-        if tp_val is not None:
-            dist_tp = ((tp_val - price) / price) * 100
-            levels.append({
-                "price": tp_val,
+        for tp_name in ["take_profit", "take_profit2"]:
+            tp_val = getattr(analysis, tp_name, None)
+            if tp_val is not None:
+                dist_tp = ((tp_val - price) / price) * 100
+                levels.append({
+                    "price": tp_val,
                 "label_raw": "🎯 TAKE PROFIT (TP)",
                 "color": Fore.LIGHTCYAN_EX,
                 "detail": f"Zysk: {dist_tp:+.2f}%",
