@@ -24,7 +24,7 @@ from config import (
     WATCH_ENTRY_SCORE,
     MIN_RR
 )
-
+from utils.func import _safe_number
 
 class SignalGenerator:
 
@@ -39,7 +39,9 @@ class SignalGenerator:
 
         q = self.analysis.quality_score
         e = self.analysis.entry_score
-        rr = self.analysis.risk_reward
+        #bierzemy pod uwagę drugi poziom TP i jego R/R
+        rr =getattr(self.analysis, "trade_levels", {}).get("rr_tp2")
+        #rr = _safe_number(getattr(self, "trade_levels", {}).get("rr_tp2")) 
 
         # Weryfikacja minimalnego poziomu R/R
         has_valid_rr = (rr is not None) and (rr >= MIN_RR)

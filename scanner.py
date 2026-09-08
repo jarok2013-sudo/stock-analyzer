@@ -9,6 +9,7 @@ from utils.indicators import add_indicators
 from download import fetch_data, get_instrument_info
 from reports.pdf_generator import generate_summary_pdf_report
 from datetime import datetime
+from utils.func import _safe_number
 
 from pathlib import Path
 
@@ -256,7 +257,7 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
 
             sl_val = getattr(analysis, "stop_loss", None)
             tp_val = getattr(analysis, "take_profit", None)
-            rr_val = getattr(analysis, "risk_reward", None)
+            rr_val = _safe_number(analysis.trade_levels["rr_tp2"])
 
             supp_obj = getattr(analysis, "nearest_support", None)
             res_obj = getattr(analysis, "nearest_resistance", None)

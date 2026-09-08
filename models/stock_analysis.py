@@ -33,7 +33,7 @@ from utils.supports import (
     find_support_zones,
     rate_supports,
 )
-from utils.func import _bool_value
+from utils.func import _bool_value, _safe_number
 
 
 class StockAnalysis:
@@ -127,9 +127,7 @@ class StockAnalysis:
 
         # Sygnały transakcyjne i Poziomy Trade
         self.trade_signal = None
-        self.stop_loss = None
-        self.take_profit = None
-        self.risk_reward = None
+        self.trade_levels =[]
         self.confidence = 0
 
         # Pola fundamentalne z bazy danych
@@ -307,9 +305,7 @@ class StockAnalysis:
     def calculate_trade_levels(self):
         """Wyznacza Stop Loss, Take Profit oraz wskaźnik Risk/Reward."""
         (
-            self.stop_loss,
-            self.take_profit,
-            self.risk_reward,
+            self.trade_levels
         ) = calculate_trade_levels(self)
 
     def calculate_fundamental_score(self):
@@ -367,7 +363,8 @@ class StockAnalysis:
         quality = getattr(self, "quality_score", 0) or 0
         fundamental = getattr(self, "fundamental_score", 0) or 0
         sentiment = getattr(self, "analyst_sentiment_score", 0) or 0
-        rr = getattr(self, "risk_reward", None)
+        rr = _safe_number(getattr(self, "trade_levels", {}).get("rr_tp2")) 
+    
 
         # ==========================================================
         # 2. TWARDY BEZPIECZNIK
@@ -462,7 +459,7 @@ class StockAnalysis:
         print("\n--- POZIOMY TRANSAKCYJNE ---")
         print(f"Stop Loss (SL):       {getattr(self, 'stop_loss', 'Brak')}")
         print(f"Take Profit (TP):     {getattr(self, 'take_profit', 'Brak')}")
-        print(f"Risk / Reward (R/R):  {getattr(self, 'risk_reward', 'Brak')}")
+        print(f"Risk / Reward (R/R):  {_safe_number(self.analysis.trade_levels["rr_tp2"]) if hasattr(self, 'analysis') and hasattr(self.analysis, 'trade_levels') else 'Brak'}")
         print("=" * 50)
 
     def check_nulls(self):

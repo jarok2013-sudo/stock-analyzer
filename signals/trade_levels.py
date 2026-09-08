@@ -91,8 +91,8 @@ def calculate_trade_levels(analysis, atr_multiplier: float = 0.5):
     if risk_amount <= 0:
         return {
             "stop_loss": round(stop_loss, 2),
-            "take_profit_1": None,
-            "take_profit_2": None,
+            "tp1": None,
+            "tp2": None,
             "rr_tp1": 0.0,
             "rr_tp2": 0.0,
             "tp1_source": None,
@@ -215,13 +215,13 @@ def calculate_trade_levels(analysis, atr_multiplier: float = 0.5):
     return {
         "stop_loss": round(stop_loss, 2),
 
-        "take_profit_1": (
+        "tp1": (
             round(take_profit_1, 2)
             if take_profit_1 is not None
             else None
         ),
 
-        "take_profit_2": round(take_profit_2, 2),
+        "tp2": round(take_profit_2, 2),
 
         "rr_tp1": rr_tp1,
 

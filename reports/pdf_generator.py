@@ -23,7 +23,7 @@ from reportlab.platypus import (
 )
 
 from charts.chart_builder import ChartBuilder
-from utils.func import fmt_num, fmt_date
+from utils.func import fmt_num, fmt_date, _safe_number
 import config
 
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
@@ -338,7 +338,7 @@ def generate_pdf_report(analysis, filename=None):
 
     # Parametry transakcji + Checklista
     trade_signal = getattr(analysis, "trade_signal", "NEUTRAL")
-    trade_rr = getattr(analysis, "risk_reward", None)
+    trade_rr = _safe_number(analysis.trade_levels["rr_tp2"])
     rr_str = f"{trade_rr:.2f}" if trade_rr is not None else "N/A"
     atr_val = getattr(analysis, "atr", None)
     atr_str = f"{atr_val:.2f} {currency}" if atr_val is not None else "N/A"

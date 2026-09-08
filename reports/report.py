@@ -84,6 +84,7 @@ class Report:
         analysis = self.analysis
         price = analysis.price
         currency = self.currency
+        trade_levels = getattr(analysis, "trade_levels", None) or {}
 
         levels = []
 
@@ -115,35 +116,63 @@ class Report:
                     "type": "TARGET",
                 })
 
-        # 2. NAJBLIŻSZY OPÓR (Nad ceną)
-        res = getattr(analysis, "nearest_resistance", None)
-        if res and res.get("price") and res["price"] > price:
-            res_p = res["price"]
-            tests = res.get("touches", 1)
-            dist = getattr(analysis, "resistance_distance", 0)
+        # ==============================================================
+        # 2. OPORY NAD CENĄ (Główny opór + opory pośrednie do TP2)
+        # ==============================================================
+        tp1_val = trade_levels.get("tp1")
+        tp2_val = trade_levels.get("tp2")
+        rated_resistances = getattr(analysis, "rated_resistances", [])
+
+        # Wyciągamy wszystkie prawidłowe opory znajdujące się ŚCIŚLE NAD ceną
+        resistances_above = [
+            r for r in rated_resistances
+            if isinstance(r, dict) 
+            and r.get("price") is not None 
+            and float(r["price"]) > price
+        ]
+        resistances_above.sort(key=lambda x: float(x["price"]))
+
+        for r in resistances_above:
+            r_price = float(r["price"])
+            tests = r.get("touches", 1)
+            dist = ((r_price - price) / price) * 100
+
+            # Przeszkoda występuje tylko wtedy, gdy opór leży ŚCIŚLE PONIŻEJ celu TP2
+            is_obstacle = (tp2_val is not None and r_price < (tp2_val - 0.01))
+
+            if is_obstacle:
+                label = f"🔴 OPÓR / PRZESZKODA [do TP2] [{tests}x]"
+                color = Fore.LIGHTRED_EX
+            else:
+                label = f"🔴 OPÓR (Resistance) [{tests}x]"
+                color = Fore.RED
+
             levels.append({
-                "price": res_p,
-                "label_raw": f"🔴 OPÓR (Resistance) [{tests}x]",
-                "color": Fore.RED,
+                "price": r_price,
+                "label_raw": label,
+                "color": color,
                 "detail": f"Odstęp: +{dist:.2f}%",
                 "type": "RESISTANCE",
             })
 
-        # 3. PRZEBITE OPORY / STREFY RE-TESTU (Pod ceną)
-        rated_resistances = getattr(analysis, "rated_resistances", [])
-        broken = [
+        # ==============================================================
+        # 3. PRZEBITE OPORY / STREFY RE-TESTU (Ściśle POD ceną)
+        # ==============================================================
+        broken_resistances = [
             r for r in rated_resistances
-            if isinstance(r, dict) and r.get("price") and r["price"] < price
+            if isinstance(r, dict) 
+            and r.get("price") is not None 
+            and float(r["price"]) <= price
         ]
-        if broken:
-            # Najbliższy przełamany opór pod ceną (np. 156.67 PLN)
-            last_broken = max(broken, key=lambda x: x["price"])
-            b_price = last_broken["price"]
+
+        if broken_resistances:
+            last_broken = max(broken_resistances, key=lambda x: float(x["price"]))
+            b_price = float(last_broken["price"])
             dist_b = ((price - b_price) / price) * 100
             
-            # Zapobiegamy dublowaniu, jeśli ten sam poziom jest oznaczony jako główne wsparcie
             supp_price = getattr(analysis, "nearest_support", {}).get("price") if getattr(analysis, "nearest_support", None) else None
-            if not supp_price or abs(b_price - supp_price) > 0.01:
+            
+            if not supp_price or abs(b_price - float(supp_price)) > 0.01:
                 levels.append({
                     "price": b_price,
                     "label_raw": "🟢 WSPARCIE (Dawny Opór/Flip)",
@@ -152,7 +181,9 @@ class Report:
                     "type": "SUPPORT_FLIP",
                 })
 
+        # ==============================================================
         # 4. GŁÓWNE WSPARCIE
+        # ==============================================================
         supp = getattr(analysis, "nearest_support", None)
         if supp and supp.get("price"):
             sup_p = supp["price"]
@@ -166,21 +197,38 @@ class Report:
                 "type": "SUPPORT",
             })
 
-        # 5. TAKE PROFIT (TP)
-        for tp_name in ["take_profit", "take_profit2"]:
-            tp_val = getattr(analysis, tp_name, None)
+        # ==============================================================
+        # 5. TAKE PROFIT (TP) - scalanie z oporami przy tej samej cenia
+        # ==============================================================
+        for tp_name in ["tp1", "tp2"]:
+            tp_val = trade_levels.get(tp_name) 
+            tp_source = trade_levels.get(f"{tp_name}_source", "")
+            tp_rr = trade_levels.get(f"rr_{tp_name}", "")
+
             if tp_val is not None:
-                dist_tp = ((tp_val - price) / price) * 100
-                levels.append({
-                    "price": tp_val,
-                "label_raw": "🎯 TAKE PROFIT (TP)",
-                "color": Fore.LIGHTCYAN_EX,
-                "detail": f"Zysk: {dist_tp:+.2f}%",
-                "type": "TP",
-            })
+                # Szukamy, czy na drabinie jest już opór o tej samej cenie (różnica < 0.01 PLN)
+                matching_res = next(
+                    (lvl for lvl in levels if lvl["type"] == "RESISTANCE" and abs(lvl["price"] - tp_val) < 0.01), 
+                    None
+                )
+
+                if matching_res:
+                    # Zamiast ukrywać TP1, doklejamy informację do istniejącego oporu
+                    matching_res["label_raw"] += f" 🎯 [TP: {tp_name.upper()} (RR={tp_rr})]"
+                    matching_res["color"] = Fore.LIGHTCYAN_EX
+                else:
+                    # Jeśli nie ma kolizji z oporem, dodajemy osobny wiersz TP
+                    dist_tp = ((tp_val - price) / price) * 100
+                    levels.append({
+                        "price": tp_val,
+                        "label_raw": f"🎯 TAKE PROFIT ({tp_name.upper()}) {tp_source} (RR={tp_rr})",
+                        "color": Fore.LIGHTCYAN_EX,
+                        "detail": f"Zysk: {dist_tp:+.2f}%",
+                        "type": "TP",
+                    })
 
         # 6. STOP LOSS (SL)
-        sl_val = getattr(analysis, "stop_loss", None)
+        sl_val = _safe_number(self.analysis.trade_levels["stop_loss"])
         if sl_val is not None:
             dist_sl = ((price - sl_val) / price) * 100
             levels.append({
@@ -301,7 +349,7 @@ class Report:
         f_score = getattr(self.analysis, "fundamental_score", 0) or 0
         q_score = getattr(self.analysis, "quality_score", 0) or 0
         e_score = getattr(self.analysis, "entry_score", 0) or 0
-        rr = getattr(self.analysis, "risk_reward", 0) or 0
+        rr = _safe_number(self.analysis.trade_levels["rr_tp2"])
 
         print(f"  Analyst Sentiment : {s_score:3d}/100 [Waga: 15%]")
         print(f"  Fundamentals      : {f_score:3d}/100 [Waga: 25%]")
@@ -443,25 +491,43 @@ class Report:
         print("\n=========== TRADE ==========")
 
         confidence = getattr(self.analysis, "confidence", 0) or 0
-        rr = getattr(self.analysis, "risk_reward", None)
-        sl = getattr(self.analysis, "stop_loss", None)
-        tp = getattr(self.analysis, "take_profit", None)
 
-        if confidence >= 80:
-            signal = f"{Fore.GREEN}BUY (Strong Setup){Style.RESET_ALL}"
-        elif confidence >= 60:
-            signal = f"{Fore.YELLOW}ACCUMULATE / WATCH{Style.RESET_ALL}"
+        rr = _safe_number(
+            self.analysis.trade_levels.get("rr_tp2")
+        )
+
+        sl = _safe_number(
+            self.analysis.trade_levels.get("stop_loss")
+        )
+
+        tp = _safe_number(
+            self.analysis.trade_levels.get("tp2")
+        )
+
+        # Jedno źródło prawdy dla sygnału
+        signal = self.analysis.trade_signal
+
+        if signal == "STRONG BUY":
+            signal_color = Fore.GREEN
+        elif signal in ("BUY", "WATCH"):
+            signal_color = Fore.YELLOW
         else:
-            signal = f"{Fore.RED}AVOID / NO TRADE{Style.RESET_ALL}"
+            signal_color = Fore.RED
 
-        print(f"Signal      : {signal}")
+        signal_display = (
+            f"{signal_color}{signal}{Style.RESET_ALL}"
+        )
+
+        print(f"Signal      : {signal_display}")
         print(f"Confidence  : {confidence:.1f}%")
         print(f"RR Ratio    : {interp.interpret_risk_reward(rr)}")
+
         print(
             f"Stop Loss   : {sl:.2f} {self.currency}"
             if sl is not None
             else "Stop Loss   : N/A"
         )
+
         print(
             f"Take Profit : {tp:.2f} {self.currency}"
             if tp is not None
@@ -514,7 +580,7 @@ class Report:
         if rsi is not None:
             self._line(rsi < 70, f"RSI nieprzegrzany (RSI = {rsi:.1f})")
 
-        rr = getattr(self.analysis, "risk_reward", None)
+        rr = _safe_number(self.analysis.trade_levels["rr_tp2"])
         self._line(
             rr is not None and rr >= 2.0,
             f"Akceptowalny stosunek Zysk/Ryzyko (RR = {rr:.2f})"
