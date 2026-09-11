@@ -15,6 +15,7 @@ from pathlib import Path
 
 OUTPUT_HTML_DIR = Path("output/html")
 
+
 def calculate_ytd_change(df: pd.DataFrame) -> float | None:
     """Oblicza zmianę procentową YTD (od początku bieżącego roku)."""
     if df.empty or "close" not in df.columns:
@@ -38,7 +39,7 @@ def calculate_ytd_change(df: pd.DataFrame) -> float | None:
 def generate_html_report(results: list, portfolio_name: str = "default", filename: str = None) -> Path:
     """
     Generuje zbiorczy raport HTML z wynikami skanowania i zapisuje go w output/html/
-    nazwanym według szablonu: raport_<nazwa_portfela>.html
+    nazwanym według szablonu: raport_<nazwa_portfela>_<timestamp>.html
     """
     OUTPUT_HTML_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -63,13 +64,14 @@ def generate_html_report(results: list, portfolio_name: str = "default", filenam
         rows = ""
 
         if not items:
-            rows = '<tr><td colspan="18" style="text-align: center; color: #8b949e;">Brak spółek w tej kategorii.</td></tr>'
+            rows = '<tr><td colspan="20" style="text-align: center; color: #8b949e;">Brak spółek w tej kategorii.</td></tr>'
         else:
             for item in items:
                 curr = item.get("currency", "")
                 company_name = item.get("name", item["ticker"])
 
                 sl_str = f"{item['sl']:.2f} {curr}" if item["sl"] is not None else "Brak"
+                tp1_str = f"{item['tp1']:.2f} {curr}" if item["tp1"] is not None else "Brak"
                 tp_str = f"{item['tp']:.2f} {curr}" if item["tp"] is not None else "Brak"
 
                 chg_val = item.get("change_1d")
@@ -86,14 +88,20 @@ def generate_html_report(results: list, portfolio_name: str = "default", filenam
                 else:
                     ytd_str = "N/D"
 
+                if item["rr1"] is not None:
+                    rr1_color = "#2ea043" if item["rr1"] >= 2.0 else ("#e3b341" if item["rr1"] >= 1.2 else "#f85149")
+                    rr1_str = f'<span style="color: {rr1_color}; font-weight: bold;">1 : {item["rr1"]:.2f}</span>'
+                else:
+                    rr1_str = "N/D"
+
                 if item["rr"] is not None:
                     rr_color = "#2ea043" if item["rr"] >= 2.0 else ("#e3b341" if item["rr"] >= 1.2 else "#f85149")
                     rr_str = f'<span style="color: {rr_color}; font-weight: bold;">1 : {item["rr"]:.2f}</span>'
                 else:
                     rr_str = "N/D"
 
-                supp_str = f"{item['support']:.2f} ({item['dist_supp_pct']:+.1f}%)" if item["support"] is not None else "Brak"
-                res_str = f"{item['resistance']:.2f} ({item['dist_res_pct']:+.1f}%)" if item["resistance"] is not None else "ATH"
+                supp_str = f"{item['support']:.2f} (-{item['dist_supp_pct']:.1f}%)" if item["support"] is not None else "Brak"
+                res_str = f"{item['resistance']:.2f} (+{item['dist_res_pct']:.1f}%)" if item["resistance"] is not None else "ATH"
 
                 target_val = item.get("target_price")
                 target_str = f"{target_val:.2f} {curr}" if target_val else "N/D"
@@ -117,11 +125,13 @@ def generate_html_report(results: list, portfolio_name: str = "default", filenam
                     <td>{supp_str}</td>
                     <td>{res_str}</td>
                     <td style="color: #f85149; font-weight: bold;">{sl_str}</td>
+                    <td style="color: #2ea043; font-weight: bold;">{tp1_str}</td>
+                    <td>{rr1_str}</td>
                     <td style="color: #2ea043; font-weight: bold;">{tp_str}</td>
                     <td>{rr_str}</td>
                     <td><span class="badge" style="background-color: #238636;">{item['q_score']} pkt</span></td>
                     <td><span class="badge" style="background-color: #1f6feb;">{item['e_score']} pkt</span></td>
-                    <td><span class="badge" style="background-color: #8957e5;">{item['total_score']:.1f}</span></td>
+                    <td><span class="badge" style="background-color: #8957e5;">{item['total_score']:.1f}%</span></td>
                     <td>{item['obv_status']}</td>
                     <td><strong>{item['trade_signal']}</strong></td>
                 </tr>
@@ -146,11 +156,13 @@ def generate_html_report(results: list, portfolio_name: str = "default", filenam
                         <th>Wsparcie (Dyst. %)</th>
                         <th>Opór (Dyst. %)</th>
                         <th>SL</th>
-                        <th>TP</th>
-                        <th>RR</th>
+                        <th>TP1</th>
+                        <th>RR1</th>
+                        <th>TP2</th>
+                        <th>RR2</th>
                         <th>Qual</th>
                         <th>Entr</th>
-                        <th>TOTAL</th>
+                        <th>CONFIDENCE</th>
                         <th>Status OBV</th>
                         <th>Sygnał</th>
                     </tr>
@@ -204,6 +216,7 @@ def generate_html_report(results: list, portfolio_name: str = "default", filenam
         f.write(html_content)
 
     print(f"\n[HTML] Raport wygenerowany pomyślnie i zapisany w pliku: {target_path}")
+    return target_path
 
 
 def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
@@ -243,9 +256,19 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
             waluta = info.get("currency", "USD")
             company_name = info.get("shortName") or info.get("longName") or ticker
 
-            q_score = getattr(analysis, "quality_score", 0)
-            e_score = getattr(analysis, "entry_score", 0)
-            total_score = round((q_score * 0.4) + (e_score * 0.6), 1)
+            q_score = getattr(analysis, "quality_score", 0) or 0
+            e_score = getattr(analysis, "entry_score", 0) or 0
+            f_score = getattr(analysis, "fundamental_score", 0) or 0
+            a_score = getattr(analysis, "analyst_sentiment_score", getattr(analysis, "sentiment_score", 0)) or 0
+
+            # Użycie funkcji wyliczającej spójnej z raportem konsolowym
+            if hasattr(analysis, "calculate_confidence"):
+                total_score = round(analysis.calculate_confidence(), 1)
+            else:
+                total_score = round(
+                    (a_score * 0.15) + (f_score * 0.25) + (q_score * 0.25) + (e_score * 0.35),
+                    1
+                )
 
             obv_status = "⚪ Płaski"
             if getattr(analysis, "obv_bullish_div", False):
@@ -255,19 +278,31 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
             elif getattr(analysis, "obv_rising", False):
                 obv_status = "🟢 OBV rośnie"
 
-            sl_val = getattr(analysis, "stop_loss", None)
-            tp_val = getattr(analysis, "take_profit", None)
-            rr_val = _safe_number(analysis.trade_levels["rr_tp2"])
-
-            supp_obj = getattr(analysis, "nearest_support", None)
-            res_obj = getattr(analysis, "nearest_resistance", None)
+            trade_levels = getattr(analysis, "trade_levels", {}) or {}
+                              
+            sl_val = _safe_number(trade_levels.get("stop_loss"))
+            tp1_val = _safe_number(trade_levels.get("tp1"))
+            rr1_val = _safe_number(trade_levels.get("rr_tp1"))
+            tp_val = _safe_number(trade_levels.get("tp2"))
+            rr_val = _safe_number(trade_levels.get("rr_tp2"))
+        
+            # Priorytet dla najbliższych poziomów dynamicznych z fallbackiem do statycznych (zgodnie z report_levels)
+            supp_obj = getattr(analysis, "nearest_dynamic_support", None) or getattr(analysis, "nearest_support", None)
+            res_obj = getattr(analysis, "nearest_dynamic_resistance", None) or getattr(analysis, "nearest_resistance", None)
 
             supp_price = supp_obj.get("price") if isinstance(supp_obj, dict) else None
             res_price = res_obj.get("price") if isinstance(res_obj, dict) else None
 
             price = analysis.price
-            dist_supp_pct = ((price - supp_price) / price * 100) if supp_price else 0.0
-            dist_res_pct = ((res_price - price) / price * 100) if res_price else 0.0
+            
+            # Pobieranie odległości z właściwości dynamicznych lub wyliczenie bezpośrednie
+            dist_supp_pct = getattr(analysis, "dynamic_support_distance", None)
+            if dist_supp_pct is None:
+                dist_supp_pct = ((price - supp_price) / price * 100) if supp_price and price else 0.0
+
+            dist_res_pct = getattr(analysis, "dynamic_resistance_distance", None)
+            if dist_res_pct is None:
+                dist_res_pct = ((res_price - price) / price * 100) if res_price and price else 0.0
 
             item = {
                 "ticker": ticker,
@@ -277,6 +312,8 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
                 "change_1d": change_1d,
                 "ytd_change": ytd_change,
                 "sl": sl_val,
+                "tp1": tp1_val,
+                "rr1": rr1_val,   
                 "tp": tp_val,
                 "rr": rr_val,
                 "support": supp_price,
@@ -285,15 +322,17 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
                 "dist_res_pct": dist_res_pct,
                 "q_score": q_score,
                 "e_score": e_score,
+                "f_score": f_score,
+                "a_score": a_score,
                 "total_score": total_score,
                 "obv_status": obv_status,
                 "trade_signal": trade_signal,
 
-                # --- NOWE POLA FUNDAMENTALNE ---
-                "target_price": getattr(analysis, "target_mean_price", None),
-                "pe_ratio": getattr(analysis, "pe_ratio", None),
-                "div_yield": getattr(analysis, "dividend_yield", None),
-                "rec_key": getattr(analysis, "recommendation_key", "N/D"),
+                # --- POLA FUNDAMENTALNE ---
+                "target_price": info.get("targetMeanPrice"),
+                "pe_ratio": info.get("trailingPE"),
+                "div_yield": info.get("dividendYield"),
+                "rec_key": info.get("recommendationKey", "N/D"),
             }
 
             if trade_signal in ["STRONG BUY", "BUY"]:
@@ -326,8 +365,8 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
 
         print(
             f"{'Ticker':<8} | {'Nazwa':<20} | {'Cena':<11} | {'1D %':<7} | {'YTD %':<7} | "
-            f"{'Supp %':<8} | {'Res %':<8} | {'SL':<8} | {'TP':<8} | "
-            f"{'RR':<6} | {'Qual':<5} | {'Entr':<5} | {'TOTAL':<5} | "
+            f"{'Supp %':<8} | {'Res %':<8} | {'SL':<8} | {'TP1':<8} | {'RR1':<8} | "
+            f"{'TP':<8} | {'RR':<6} | {'Qual':<5} | {'Entr':<5} | {'TOTAL':<5} | "
             f"{'Status OBV':<19} | {'Trade Signal':<10}"
         )
         print("-" * 185)
@@ -335,14 +374,15 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
             chg_str = f"{res['change_1d']:+.2f}%" if res["change_1d"] is not None else "N/D"
             ytd_str = f"{res['ytd_change']:+.2f}%" if res["ytd_change"] is not None else "N/D"
             sl_c = f"{res['sl']:.2f}" if res["sl"] is not None else "N/D"
+            tp1_c = f"{res['tp1']:.2f}" if res["tp1"] is not None else "N/D"
+            rr1_c = f"1:{res['rr1']:.2f}" if res["rr1"] is not None else "N/D"
             tp_c = f"{res['tp']:.2f}" if res["tp"] is not None else "N/D"
             rr_c = f"1:{res['rr']:.2f}" if res["rr"] is not None else "N/D"
             price_str = f"{res['price']:.2f} {res['currency']}"
             
-            supp_pct_str = f"-{res['dist_supp_pct']:.1f}%" if res["support"] else "Brak"
-            res_pct_str = f"+{res['dist_res_pct']:.1f}%" if res["resistance"] else "ATH"
+            supp_pct_str = f"-{res['dist_supp_pct']:.1f}%" if res["support"] is not None else "Brak"
+            res_pct_str = f"+{res['dist_res_pct']:.1f}%" if res["resistance"] is not None else "ATH"
 
-            # Przycinanie zbyt długich nazw do konsoli
             name_truncated = (res['name'][:18] + '..') if len(res['name']) > 20 else res['name']
 
             print(
@@ -354,6 +394,8 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
                 f"{supp_pct_str:>8} | "
                 f"{res_pct_str:>8} | "
                 f"{sl_c:<8} | "
+                f"{tp1_c:<8} | "
+                f"{rr1_c:<6} | "
                 f"{tp_c:<8} | "
                 f"{rr_c:<6} | "
                 f"{res['q_score']:>3} pkt | "
@@ -369,9 +411,7 @@ def scan_watchlist(tickers: list[str], portfolio_name: str = "default"):
     print_section("ODRZUCONE (Brak trendu / Słabość / Sygnał AVOID)", results["REJECTED"], "⚠️")
 
     print("\n" + "=" * 185)
-    generate_html_report(results,portfolio_name)
-    
-
+    generate_html_report(results, portfolio_name)
     generate_summary_pdf_report(results, portfolio_name)
 
 

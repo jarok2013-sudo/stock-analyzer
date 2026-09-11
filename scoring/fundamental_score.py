@@ -334,3 +334,62 @@ def calculate_fundamental_score(analysis):
     score = max(0, min(100, int(score)))
 
     return score, reasons
+
+def calculate_fundamental_etf_score(analysis):
+    """
+    Zastępcza analiza 'fundamentów' dla ETF na podstawie płynności (AUM),
+    stopy dywidendy oraz trendu długoterminowego (EMA200).
+    """
+    score = 0
+    reasons = []
+    info = analysis.instrument_info or {}
+
+    # 1. Wielkość funduszu (AUM / totalAssets) — max 30 pkt
+    aum = _number(info.get("totalAssets")) or 0
+    if aum >= 500_000_000:
+        score += 30
+        _add_reason(reasons, 30, f"Bardzo wysokie aktywa AUM ({aum / 1e6:.1f}M)")
+    elif aum >= 100_000_000:
+        score += 25
+        _add_reason(reasons, 25, f"Wysokie aktywa AUM ({aum / 1e6:.1f}M)")
+    elif aum >= 10_000_000:
+        score += 15
+        _add_reason(reasons, 15, f"Umiarkowane aktywa AUM ({aum / 1e6:.1f}M)")
+    elif aum > 0:
+        score += 5
+        _add_reason(reasons, 5, f"Niskie aktywa AUM ({aum / 1e6:.1f}M)")
+    else:
+        # Jeśli Yahoo nie ma pola totalAssets dla danego ETF (np. GPW), dajemy domyślną ocenę neutralną
+        score += 20
+        _add_reason(reasons, 20, "Brak danych AUM (Przyjęto poziom neutralny)")
+
+    # 2. Położenie ceny względem EMA200 — max 40 pkt
+    if hasattr(analysis, "df") and "ema200" in analysis.df.columns and not analysis.df["ema200"].dropna().empty:
+        latest_price = analysis.df["close"].iloc[-1]
+        ema200_val = analysis.df["ema200"].iloc[-1]
+
+        if latest_price > ema200_val:
+            score += 40
+            _add_reason(reasons, 40, "Cena znajduje się powyżej EMA200 (Trend hossy)")
+        else:
+            _add_reason(reasons, 0, "Cena poniżej EMA200 (Trend bessy)")
+    else:
+        score += 20
+        _add_reason(reasons, 20, "Brak danych EMA200 (Ocena neutralna)")
+
+    # 3. Nachylenie EMA200 (Długoterminowa dynamika) — max 30 pkt
+    if hasattr(analysis, "df") and "ema200" in analysis.df.columns and len(analysis.df) >= 20:
+        ema200_curr = analysis.df["ema200"].iloc[-1]
+        ema200_prev = analysis.df["ema200"].iloc[-20]
+
+        if math.isfinite(ema200_curr) and math.isfinite(ema200_prev) and ema200_curr > ema200_prev:
+            score += 30
+            _add_reason(reasons, 30, "Średnia EMA200 rośnie (Długoterminowy trend wzrostowy)")
+        else:
+            _add_reason(reasons, 0, "Średnia EMA200 opada lub płaska")
+    else:
+        score += 15
+        _add_reason(reasons, 15, "Brak wystarczającej historii dla nachylenia EMA200")
+
+    score = max(0, min(100, int(score)))
+    return score, reasons

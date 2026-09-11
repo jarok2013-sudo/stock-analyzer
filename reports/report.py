@@ -13,12 +13,21 @@ class Report:
         self.info = getattr(self.analysis, "instrument_info", {}) or {}
         self.currency = self.info.get("currency", "PLN")
 
+        self.is_etf = getattr(analysis, "is_etf", False)
+    
     def print(self):
         self.report_header()
         self.print_dynamic_price_ladder()
         self.report_levels()
         self.report_total_score()
-        self.report_sentiment_score()
+        if self.is_etf:
+            print("\n====== FUNDAMENTAL & ANALYST SCORE (ETF) ======")
+            print(" ℹ️ Instrument rozpoznany jako ETF/Fundusz.")
+            print(" ℹ️ Sentyment analityków oraz klasyczne wskaźniki (P/E, ROE) są wyłączone z oceny.")
+            print(f" ℹ️ Waga Confidence przeniesiona na Quality ({self.analysis.quality_score} pkt) oraz Entry ({self.analysis.entry_score} pkt).")
+        else:
+            self.report_sentiment_score()
+
         self.report_fundamental_score()
         self.report_quality_score()
         self.report_entry_score()
@@ -175,7 +184,7 @@ class Report:
             if not supp_price or abs(b_price - float(supp_price)) > 0.01:
                 levels.append({
                     "price": b_price,
-                    "label_raw": "🟢 WSPARCIE (Dawny Opór/Flip)",
+                    "label_raw": "🟢 NOWE WSPARCIE (Dawny Opór/Flip)",
                     "color": Fore.LIGHTGREEN_EX,
                     "detail": f"Odstęp: -{dist_b:.2f}%",
                     "type": "SUPPORT_FLIP",
@@ -311,8 +320,13 @@ class Report:
         )
 
         print("\n🛡 POZIOMY WSPARCIA I OPORU:")
-        supp = getattr(self.analysis, "nearest_support", None)
-        res = getattr(self.analysis, "nearest_resistance", None)
+        supp = getattr(self.analysis, "nearest_dynamic_support", None)
+        if supp is None:
+            supp = getattr(self.analysis, "nearest_support", None)
+
+        res = getattr(self.analysis, "nearest_dynamic_resistance", None)
+        if res is None:
+            res = getattr(self.analysis, "nearest_resistance", None)
         dist_s = getattr(self.analysis, "support_distance", None)
         dist_r = getattr(self.analysis, "resistance_distance", None)
 
@@ -321,22 +335,92 @@ class Report:
 
         # WSPARCIE
         if supp and supp.get("price"):
+
             s_price = supp["price"]
             s_touches = supp.get("touches", 1)
-            dist_str = interp.interpret_distance(dist_s, is_support=True) if dist_s is not None else "N/A"
-            print(f"  • Najbliższe Wsparcie : {s_price:.2f} {self.currency} [{s_touches}x testy] ➔ Odstęp: {dist_str}")
+
+            source = supp.get(
+                "source",
+                "SUPPORT"
+            )
+
+            if source == "RESISTANCE_FLIP":
+
+                label = "🔄 FLIP SUPPORT (dawny opór)"
+
+            else:
+
+                label = "🟢 WSPARCIE"
+
+            dist_s_dynamic = (
+                getattr(
+                    self.analysis,
+                    "dynamic_support_distance",
+                    None
+                )
+            )
+
+            dist_str = (
+                interp.interpret_distance(
+                    dist_s_dynamic,
+                    is_support=True
+                )
+                if dist_s_dynamic is not None
+                else "N/A"
+            )
+
+            print(
+                f"  • {label}: "
+                f"{s_price:.2f} {self.currency} "
+                f"[{s_touches}x testy] "
+                f"➔ Odstęp: {dist_str}"
+            )
+
         else:
-            print("  • Najbliższe Wsparcie : BRAK / Nie wyznaczono")
+
+            print(
+                "  • Najbliższe Wsparcie : "
+                "BRAK / Nie wyznaczono"
+            )
 
         # OPÓR
-        res_info = interp.interpret_resistance(
-            resistance=res,
-            rated_resistances=rated_resistances,
-            price=price_val,
-            resistance_distance=dist_r,
-            currency=self.currency,
-        )
-        print(f"  • Najbliższy Opór     : {res_info}")
+        if res and res.get("price"):
+
+            r_price = res["price"]
+
+            r_touches = res.get(
+                "touches",
+                1
+            )
+
+            dist_r_dynamic = getattr(
+                self.analysis,
+                "dynamic_resistance_distance",
+                None
+            )
+
+            dist_str = (
+                interp.interpret_distance(
+                    dist_r_dynamic,
+                    is_support=False
+                )
+                if dist_r_dynamic is not None
+                else "N/A"
+            )
+
+            print(
+                f"  • Najbliższy Opór: "
+                f"{r_price:.2f} {self.currency} "
+                f"[{r_touches}x testy] "
+                f"➔ Odstęp: {dist_str}"
+            )
+
+        else:
+
+            print(
+                "  • Najbliższy Opór: "
+                "BRAK / nowe szczyty / ATH"
+            )
 
     def report_total_score(self):
         print("\n========================================================================")
@@ -417,12 +501,12 @@ class Report:
         print("\n====== QUALITY SCORE ======")
         score = getattr(self.analysis, "quality_score", 0)
 
-        if score >= 80:
-            print(f"{Fore.GREEN}● Top okazja techniczna (Silny trend, układ byczy)")
-        elif score >= 65:
-            print(f"{Fore.YELLOW}● Dobra struktura wykresu")
+        if score >= 85:
+            print(f"{Fore.GREEN}● Top okazja (Bardzo silny trend z pełnym potwierdzeniem impetu i świetnym momentem na wejście. Silny trend, układ byczy)")
+        elif score >= 70:
+            print(f"{Fore.YELLOW}● Dobra spółka (Solidny układ techniczny, warta obserwacji lub wejścia pakietowego)")
         elif score >= 50:
-            print(f"{Fore.WHITE}● Neutralna / Konsolidacja")
+            print(f"{Fore.WHITE}● Neutralna / Średniak (Brak wyraźnego przewagi konsolidacja)")
         else:
             print(f"{Fore.RED}● Słaby trend / Omijaj")
 

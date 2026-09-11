@@ -12,7 +12,7 @@ from database import save_instrument, should_update, _load_fundamentals_from_db
 from download import get_instrument_info
 from scoring.quality_score import calculate_quality_score
 from scoring.trend import get_trend
-from scoring.fundamental_score import calculate_fundamental_score
+from scoring.fundamental_score import calculate_fundamental_score, calculate_fundamental_etf_score
 from scoring.analyst_sentiment import calculate_analyst_sentiment
 
 from signals.entry_score import calculate_entry_score
@@ -34,6 +34,7 @@ from utils.supports import (
     rate_supports,
 )
 from utils.func import _bool_value, _safe_number
+from utils.dynamic_levels import calculate_dynamic_levels
 
 
 class StockAnalysis:
@@ -117,6 +118,16 @@ class StockAnalysis:
         self.support_distance = None
         self.resistance_distance = None
 
+        #dynamiczne poziomy
+        self.dynamic_supports = []
+        self.dynamic_resistances = []
+
+        self.nearest_dynamic_support = None
+        self.nearest_dynamic_resistance = None
+
+        self.dynamic_support_distance = None
+        self.dynamic_resistance_distance = None
+
         # Wyniki punktowe łączne
         self.rating = ""
         self.quality_score = 0
@@ -146,12 +157,22 @@ class StockAnalysis:
         self.analyst_upside_pct = None
         self.analyst_target_spread_pct = None
 
+        #czy etf
+        self.is_etf = False
+
+
+
     def fetch_instrument_info(self):
         """Pobiera metadane o spółce."""
         try:
             self.instrument_info = get_instrument_info(self.symbol) or {}
             #if should_update(self.symbol):
             save_instrument(self.instrument_info, symbol=self.symbol)
+            if self.instrument_info:
+                quote_type = self.instrument_info.get("quoteType", "").upper()
+                short_name = self.instrument_info.get("shortName", "").upper()
+                if quote_type == "ETF" or "ETF" in short_name or "BETA" in short_name:
+                    self.is_etf = True
         except Exception:
             self.instrument_info = {
                 "longName": self.symbol,
@@ -285,22 +306,86 @@ class StockAnalysis:
         self.is_near_ath = _bool_value(last_row.get("is_near_ath", False), default=False)
 
     def calculate_levels(self):
-        """Wyznacza lokalne ekstrema oraz strefy wsparć i oporów."""
-        extrema = find_local_minmax_vectorized(self.df, window_size=2)
-        self.minima = [e for e in extrema if e["type"] == "minimum"]
-        self.maxima = [e for e in extrema if e["type"] == "maximum"]
-        self.minmax = find_local_nearest_minmax(self.df)
+        """Wyznacza surowe oraz dynamiczne poziomy wsparć i oporów."""
 
-        self.support_zones = find_support_zones(self.minima)
-        self.rated_supports = rate_supports(self.support_zones)
-        self.nearest_support = find_nearest_support(self.price, self.rated_supports)
+        # ==========================================================
+        # 1. SUROWA GEOMETRIA
+        # ==========================================================
 
-        self.resistance_zones = find_resistance_zones(self.maxima)
-        self.rated_resistances = rate_resistances(self.resistance_zones)
-        self.nearest_resistance = find_nearest_resistance(self.price, self.rated_resistances)
+        extrema = find_local_minmax_vectorized(
+            self.df,
+            window_size=2,
+        )
 
-        self.support_distance = distance_to_support(self.price, self.nearest_support)
-        self.resistance_distance = distance_to_resistance(self.price, self.nearest_resistance)
+        self.minima = [
+            e for e in extrema
+            if e["type"] == "minimum"
+        ]
+
+        self.maxima = [
+            e for e in extrema
+            if e["type"] == "maximum"
+        ]
+
+        self.minmax = find_local_nearest_minmax(
+            self.df
+        )
+
+        # ==========================================================
+        # 2. SUROWE WSPARCIA
+        # ==========================================================
+
+        self.support_zones = find_support_zones(
+            self.minima
+        )
+
+        self.rated_supports = rate_supports(
+            self.support_zones
+        )
+
+        self.nearest_support = find_nearest_support(
+            self.price,
+            self.rated_supports,
+        )
+
+        # ==========================================================
+        # 3. SUROWE OPORY
+        # ==========================================================
+
+        self.resistance_zones = find_resistance_zones(
+            self.maxima
+        )
+
+        self.rated_resistances = rate_resistances(
+            self.resistance_zones
+        )
+
+        self.nearest_resistance = find_nearest_resistance(
+            self.price,
+            self.rated_resistances,
+        )
+
+        # ==========================================================
+        # 4. ODLEGŁOŚCI SUROWYCH POZIOMÓW
+        # ==========================================================
+
+        self.support_distance = distance_to_support(
+            self.price,
+            self.nearest_support,
+        )
+
+        self.resistance_distance = distance_to_resistance(
+            self.price,
+            self.nearest_resistance,
+        )
+
+        # ==========================================================
+        # 5. POZIOMY DYNAMICZNE
+        # ==========================================================
+
+        calculate_dynamic_levels(self)
+
+
 
     def calculate_trade_levels(self):
         """Wyznacza Stop Loss, Take Profit oraz wskaźnik Risk/Reward."""
@@ -314,6 +399,13 @@ class StockAnalysis:
             self.fundamental_score,
             self.fundamental_reasons
         ) = calculate_fundamental_score(self)
+
+    def calculate_fundamental_etf_score(self):
+        """Wylicza Fundamental Score dla ETF 0-100."""
+        (
+            self.fundamental_score,
+            self.fundamental_reasons
+        ) = calculate_fundamental_etf_score(self)
 
     
 
@@ -431,6 +523,15 @@ class StockAnalysis:
 
         return self.confidence
 
+    def calculate_confidence_ETF(self) -> float:
+        """Wylicza łączny wskaźnik Confidence Index z uwzględnieniem typu instrumentu."""
+    
+        # Dla ETF fundamenty i analitycy są pomijani.
+        # Większą wagę dajemy strukturze trendu i poziomom technicznym.
+        total_score = (self.quality_score * 0.50) + (self.entry_score * 0.50)
+        
+        return round(total_score, 1)
+
     def debug_print_analysis(self):
         """Drukuje podsumowanie kontrolne analizowanego waloru."""
         print("=" * 50)
@@ -510,13 +611,21 @@ class StockAnalysis:
         self.calculate_levels()
         
         # Prawidłowa kolejność: najpierw wczytanie fundamentów, potem łączny jakość
-        self.calculate_fundamental_score()
-        self.calculate_analyst_sentiment()
+        if self.is_etf:
+            self.calculate_fundamental_etf_score()
+            self.analyst_sentiment_score = 0
+            self.analyst_sentiment_reasons = [{"points": 0, "text": "Instrument ETF — brak ocen analityków"}]
+        else:
+            self.calculate_fundamental_score()
+            self.calculate_analyst_sentiment()
 
         self.calculate_quality_score()
         
         self.calculate_trade_levels()
         self.calculate_entry_score()
         self.calculate_signal()
-        self.calculate_confidence()
+        if self.is_etf:
+            self.calculate_confidence_ETF()
+        else:
+            self.calculate_confidence()
         return self

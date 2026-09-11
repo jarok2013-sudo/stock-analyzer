@@ -1,8 +1,22 @@
 """
-🟢 85–100+ pkt: Top okazja (Bardzo silny trend z pełnym potwierdzeniem impetu i świetnym momentem na wejście)
-🟡 70–84 pkt: Dobra spółka (Solidny układ techniczny, warta obserwacji lub wejścia pakietowego)
-⚪ 50–69 pkt: Neutralna / Średniak (Brak wyraźnego przewagi)
-🔴 Poniżej 50 pkt: Omijaj / Słaby układ
+QUALITY SCORE
+0–100 pkt
+
+Znaczenie:
+🟢 85–100 pkt: Bardzo silna jakość techniczna
+🟡 70–84 pkt: Dobra jakość techniczna
+⚪ 50–69 pkt: Neutralna / średnia jakość
+🔴 <50 pkt: Słaba jakość techniczna
+
+Quality Score odpowiada na pytanie:
+"Czy technicznie spółka jest zdrowa i ma przewagę kupujących?"
+
+Nie ocenia bezpośrednio:
+- czy TERAZ jest dobry moment na wejście,
+- czy cena jest blisko supportu,
+- czy R/R jest atrakcyjne.
+
+Za moment wejścia odpowiada Entry Score.
 """
 
 import pandas as pd
@@ -69,7 +83,7 @@ def calculate_quality_score(analysis):
         score += pts
         reasons.extend(msgs)
 
-    # Wynik zawsze 0-100
+    # Wynik zawsze 0–100
     final_score = max(0, min(100, score))
 
     return final_score, reasons
@@ -86,6 +100,10 @@ def score_trend(analysis):
 
     trend = get_trend_value(analysis)
     adx = safe_float(getattr(analysis, "adx", None))
+
+    # -------------------------------------------------------------
+    # TREND
+    # -------------------------------------------------------------
 
     if trend == "STRONG_UP":
         score += 15
@@ -129,20 +147,47 @@ def score_trend(analysis):
             reasons,
             "Trend",
             -5,
-            "Silny trend spadkowy / brak przewagi kupujących"
+            "Brak przewagi kupujących / niekorzystna struktura trendu"
         )
 
-    # ADX jako potwierdzenie siły trendu
+    # -------------------------------------------------------------
+    # ADX
+    #
+    # ADX nie mówi, czy trend jest wzrostowy/spadkowy.
+    # Mówi przede wszystkim o sile ruchu.
+    # -------------------------------------------------------------
+
     if adx is not None:
+
         if trend in ("UP", "STRONG_UP"):
-            if adx >= 30:
+
+            if adx >= 40:
                 score += 5
                 add_reason(
                     reasons,
                     "ADX",
                     5,
-                    f"Silna dynamika trendu (ADX: {adx:.1f})"
+                    f"Bardzo silna dynamika trendu wzrostowego (ADX: {adx:.1f})"
                 )
+
+            elif adx >= 30:
+                score += 4
+                add_reason(
+                    reasons,
+                    "ADX",
+                    4,
+                    f"Silna dynamika trendu wzrostowego (ADX: {adx:.1f})"
+                )
+
+            elif adx >= 24:
+                score += 2
+                add_reason(
+                    reasons,
+                    "ADX",
+                    2,
+                    f"Dobra siła trendu wzrostowego (ADX: {adx:.1f})"
+                )
+
             elif adx < 18:
                 score -= 2
                 add_reason(
@@ -151,6 +196,7 @@ def score_trend(analysis):
                     -2,
                     f"Słaba dynamika trendu (ADX: {adx:.1f})"
                 )
+
             else:
                 add_reason(
                     reasons,
@@ -160,6 +206,7 @@ def score_trend(analysis):
                 )
 
         elif trend in ("DOWN", "STRONG_DOWN"):
+
             if adx >= 30:
                 score -= 5
                 add_reason(
@@ -167,6 +214,15 @@ def score_trend(analysis):
                     "ADX",
                     -5,
                     f"Silny trend spadkowy potwierdzony przez ADX ({adx:.1f})"
+                )
+
+            elif adx >= 24:
+                score -= 2
+                add_reason(
+                    reasons,
+                    "ADX",
+                    -2,
+                    f"Trend spadkowy ma wyraźną dynamikę (ADX: {adx:.1f})"
                 )
 
     return score, reasons
@@ -194,6 +250,7 @@ def score_ema_crossovers(analysis):
     # -------------------------------------------------------------
     # 1. UKŁAD EMA
     # -------------------------------------------------------------
+
     if ema20 > ema50 > ema200:
         score += 10
         add_reason(
@@ -231,9 +288,11 @@ def score_ema_crossovers(analysis):
         )
 
     # -------------------------------------------------------------
-    # 2. ŚWIEŻY ZŁOTY KRZYŻ
+    # 2. ŚWIEŻY ZŁOTY / ŚMIERCI KRZYŻ
     # -------------------------------------------------------------
+
     if None not in (prev_ema50, prev_ema200):
+
         if ema50 > ema200 and prev_ema50 <= prev_ema200:
             score += 5
             add_reason(
@@ -301,12 +360,11 @@ def score_macd(analysis):
         )
 
     else:
-        score += 3
         add_reason(
             reasons,
             "MACD",
-            3,
-            "MACD blisko linii sygnału"
+            0,
+            "MACD neutralny względem linii sygnału"
         )
 
     return score, reasons
@@ -328,7 +386,12 @@ def score_rsi(analysis):
 
     trend = get_trend_value(analysis)
 
+    # -------------------------------------------------------------
+    # TREND WZROSTOWY
+    # -------------------------------------------------------------
+
     if trend in ("UP", "STRONG_UP"):
+
         if 40 <= rsi <= 60:
             score += 10
             add_reason(
@@ -353,7 +416,7 @@ def score_rsi(analysis):
                 reasons,
                 "RSI",
                 8,
-                f"Skrajne wyprzedanie RSI w trendzie wzrostowym — świetny punkt odbicia ({rsi:.1f})"
+                f"RSI skrajnie niskie w trendzie wzrostowym ({rsi:.1f})"
             )
 
         elif 60 < rsi <= 70:
@@ -365,16 +428,30 @@ def score_rsi(analysis):
                 f"RSI pokazuje silne momentum ({rsi:.1f})"
             )
 
-        elif rsi > 70:
-            score += 1
+        elif 70 < rsi <= 75:
+            score += 2
             add_reason(
                 reasons,
                 "RSI",
-                1,
-                f"RSI wykupione — ryzyko schłodzenia ({rsi:.1f})"
+                2,
+                f"RSI wysokie — trend nadal silny, ale rośnie ryzyko przegrzania ({rsi:.1f})"
             )
 
+        else:
+            score += 0
+            add_reason(
+                reasons,
+                "RSI",
+                0,
+                f"RSI bardzo wysokie — podwyższone ryzyko przegrzania ({rsi:.1f})"
+            )
+
+    # -------------------------------------------------------------
+    # KONSOLIDACJA
+    # -------------------------------------------------------------
+
     elif trend == "SIDEWAYS":
+
         if 40 <= rsi <= 60:
             score += 5
             add_reason(
@@ -383,14 +460,28 @@ def score_rsi(analysis):
                 5,
                 f"RSI neutralne ({rsi:.1f})"
             )
+
         elif rsi < 30:
             score += 3
             add_reason(
                 reasons,
                 "RSI",
                 3,
-                f"Wyprzedanie RSI w konsolidacji ({rsi:.1f})"
+                f"RSI wskazuje na wyprzedanie w konsolidacji ({rsi:.1f})"
             )
+
+        elif rsi > 70:
+            score -= 2
+            add_reason(
+                reasons,
+                "RSI",
+                -2,
+                f"RSI wysokie w konsolidacji — ryzyko cofnięcia ({rsi:.1f})"
+            )
+
+    # -------------------------------------------------------------
+    # TREND SPADKOWY / UNKNOWN
+    # -------------------------------------------------------------
 
     else:
         add_reason(
@@ -405,7 +496,10 @@ def score_rsi(analysis):
 
 # =====================================================================
 # SUPPORT
-# MAX: 12 pkt
+# MAX: 8 pkt
+#
+# Support w Quality Score opisuje jakość struktury.
+# Sama bliskość supportu jest przede wszystkim zadaniem Entry Score.
 # =====================================================================
 
 def score_support(analysis):
@@ -416,27 +510,37 @@ def score_support(analysis):
     rated_supports = getattr(analysis, "rated_supports", [])
     price_val = safe_float(getattr(analysis, "price", None))
 
+    # -------------------------------------------------------------
+    # BRAK SUPPORTU POD CENĄ
+    # -------------------------------------------------------------
+
     if not isinstance(support, dict):
-        # Sprawdzamy czy nastąpiło wyłamanie ostatniego znanego wsparcia w dół
+
         broken_supports = [
-            s for s in rated_supports
-            if isinstance(s, dict) and safe_float(s.get("price")) is not None and price_val is not None and safe_float(s.get("price")) > price_val
+            s
+            for s in rated_supports
+            if (
+                isinstance(s, dict)
+                and safe_float(s.get("price")) is not None
+                and price_val is not None
+                and safe_float(s.get("price")) > price_val
+            )
         ]
 
         if broken_supports:
-            score -= 8
+            score -= 6
             add_reason(
                 reasons,
                 "Support",
-                -8,
-                "Cena spadła poniżej znanego wsparcia — złamanie struktury w dół"
+                -6,
+                "Cena znajduje się poniżej znanego wsparcia — pogorszenie struktury"
             )
         else:
-            score -= 5
+            score -= 2
             add_reason(
                 reasons,
                 "Support",
-                -5,
+                -2,
                 "Brak wiarygodnego wsparcia poniżej ceny"
             )
 
@@ -445,58 +549,55 @@ def score_support(analysis):
     price = safe_float(support.get("price"))
     distance = safe_float(getattr(analysis, "support_distance", None))
 
-    tests = support.get("touches", 1)
+    touches = support.get("touches", 1)
+
     try:
-        tests = int(tests)
+        touches = int(touches)
     except (TypeError, ValueError):
-        tests = 1
+        touches = 1
 
     if price is None or distance is None:
         return score, reasons
 
-    if 0 <= distance <= 1.5 and tests >= 5:
-        score += 12
+    # -------------------------------------------------------------
+    # SILNE WSPARCIE = JAKOŚĆ STRUKTURY
+    # NIE DAJEMY 12 PKT ZA SAMĄ BLISKOŚĆ.
+    # -------------------------------------------------------------
+
+    if touches >= 5:
+        score += 6
         add_reason(
             reasons,
             "Support",
-            12,
-            f"Cena tuż nad bardzo silnym wsparciem ({tests} testów)"
+            6,
+            f"Silne wsparcie strukturalne ({touches} testów)"
         )
 
-    elif 0 <= distance <= 1.5:
-        score += 8
-        add_reason(
-            reasons,
-            "Support",
-            8,
-            f"Cena blisko wsparcia ({tests} testów)"
-        )
-
-    elif 1.5 <= distance <= 3.5:
+    elif touches >= 3:
         score += 4
         add_reason(
             reasons,
             "Support",
             4,
-            f"Wsparcie znajduje się w pobliżu ({distance:.1f}%)"
+            f"Wiarygodne wsparcie ({touches} testy)"
         )
 
-    elif distance >= 10:
-        score += 0
-        add_reason(
-            reasons,
-            "Support",
-            0,
-            "Wsparcie znajduje się daleko"
-        )
-
-    else:
+    elif touches >= 2:
         score += 2
         add_reason(
             reasons,
             "Support",
             2,
-            f"Bezpieczny odstęp od wsparcia ({distance:.1f}%)"
+            f"Widoczne wsparcie ({touches} testy)"
+        )
+
+    else:
+        score += 1
+        add_reason(
+            reasons,
+            "Support",
+            1,
+            "Obecne wsparcie, ale słabo potwierdzone"
         )
 
     return score, reasons
@@ -504,7 +605,10 @@ def score_support(analysis):
 
 # =====================================================================
 # RESISTANCE
-# MAX: 10 pkt
+# MAX: 8 pkt
+#
+# Resistance w Quality Score ocenia strukturę i przestrzeń,
+# ale nie traktujemy braku oporu jako automatycznego +10.
 # =====================================================================
 
 def score_resistance(analysis):
@@ -515,104 +619,121 @@ def score_resistance(analysis):
     rated_resistances = getattr(analysis, "rated_resistances", [])
     price_val = safe_float(getattr(analysis, "price", None))
 
-    # -----------------------------------------------------------------
-    # BRAK NAJBLIŻSZEGO OPORU NAD CENĄ (WYBICIE / ATH)
-    # -----------------------------------------------------------------
-    # Sprawdzamy: brak słownika, cena == None LUB is_ath == True
-    is_ath = isinstance(resistance, dict) and resistance.get("is_ath", False)
-    res_price = safe_float(resistance.get("price")) if isinstance(resistance, dict) else None
+    # -------------------------------------------------------------
+    # OPÓR NAD CENĄ
+    # -------------------------------------------------------------
 
-    if not isinstance(resistance, dict) or res_price is None or is_ath:
-        broken_resistances = [
-            r for r in rated_resistances
-            if isinstance(r, dict) and safe_float(r.get("price")) is not None and price_val is not None and safe_float(r.get("price")) < price_val
-        ]
+    if isinstance(resistance, dict):
 
-        if broken_resistances:
-            # Znajdujemy ostatnio przełamany opór pod ceną
-            last_broken = max(broken_resistances, key=lambda x: safe_float(x.get("price")))
-            broken_price = safe_float(last_broken.get("price"))
-            dist_from_breakout = ((price_val - broken_price) / price_val) * 100.0 if price_val else 0.0
+        res_price = safe_float(resistance.get("price"))
+        distance = safe_float(
+            getattr(analysis, "resistance_distance", None)
+        )
 
-            score += 10
+        if res_price is None or distance is None:
+            return score, reasons
+
+        touches = resistance.get("touches", 1)
+
+        try:
+            touches = int(touches)
+        except (TypeError, ValueError):
+            touches = 1
+
+        # Bliski silny opór = ryzyko strukturalne
+        if 0 <= distance <= 2.0:
+
+            if touches >= 5:
+                score -= 8
+                add_reason(
+                    reasons,
+                    "Resistance",
+                    -8,
+                    f"Cena blisko bardzo silnego oporu ({touches} testów, {distance:.1f}%)"
+                )
+            else:
+                score -= 5
+                add_reason(
+                    reasons,
+                    "Resistance",
+                    -5,
+                    f"Cena blisko oporu ({touches} testów, {distance:.1f}%)"
+                )
+
+        elif 2.0 < distance < 5.0:
+
             add_reason(
                 reasons,
                 "Resistance",
-                10,
-                f"Przebito kluczowy opór ({broken_price:.2f} PLN). Wybicie ATH / czyste niebo (+{dist_from_breakout:.1f}%) 🚀"
+                0,
+                f"Umiarkowana przestrzeń do oporu ({distance:.1f}%)"
             )
-        else:
-            score += 10
+
+        elif 5.0 <= distance < 10.0:
+
+            score += 2
             add_reason(
                 reasons,
                 "Resistance",
-                10,
-                "Brak najbliższego oporu — wybicie szczytów / ATH 🚀"
+                2,
+                f"Dobra przestrzeń do najbliższego oporu ({distance:.1f}%)"
+            )
+
+        else:
+
+            score += 4
+            add_reason(
+                reasons,
+                "Resistance",
+                4,
+                f"Dużo przestrzeni do najbliższego oporu ({distance:.1f}%)"
             )
 
         return score, reasons
 
-    # -----------------------------------------------------------------
-    # KIEDY OPÓR ZNAJDUJE SIĘ NAD CENĄ (res_price is not None)
-    # -----------------------------------------------------------------
-    distance = safe_float(getattr(analysis, "resistance_distance", None))
+    # -------------------------------------------------------------
+    # BRAK OPORU NAD CENĄ
+    # -------------------------------------------------------------
 
-    touches = resistance.get("touches", 1)
-    try:
-        touches = int(touches)
-    except (TypeError, ValueError):
-        touches = 1
+    broken_resistances = [
+        r
+        for r in rated_resistances
+        if (
+            isinstance(r, dict)
+            and safe_float(r.get("price")) is not None
+            and price_val is not None
+            and safe_float(r.get("price")) < price_val
+        )
+    ]
 
-    if distance is None:
-        return score, reasons
+    if broken_resistances:
 
-    # 1. Bardzo blisko oporu (0 - 2.0%) — Wysokie ryzyko zatrzymania
-    if 0 <= distance <= 2.0:
-        if touches >= 5:
-            score -= 10
-            add_reason(
-                reasons,
-                "Resistance",
-                -10,
-                f"Cena tuż pod bardzo silnym oporem ({touches} testów, {distance:.1f}%)",
-            )
-        else:
-            score -= 6
-            add_reason(
-                reasons,
-                "Resistance",
-                -6,
-                f"Cena blisko oporu ({touches} testów, {distance:.1f}%)",
-            )
+        last_broken = max(
+            broken_resistances,
+            key=lambda x: safe_float(x.get("price"))
+        )
 
-    # 2. Umiarkowany odstęp (2.0% - 5.0%) — Neutralnie / Blisko przeszkody
-    elif 2.0 < distance < 5.0:
-        # Brak punktów (score += 0)
+        broken_price = safe_float(last_broken.get("price"))
+
+        score += 6
+
         add_reason(
             reasons,
             "Resistance",
-            0,
-            f"Umiarkowany odstęp od oporu ({distance:.1f}%)",
+            6,
+            f"Cena znajduje się powyżej ostatniego znanego oporu ({broken_price:.2f})"
         )
 
-    # 3. Bezpieczny bufor (5.0% - 10.0%) — Dobre miejsce do ruchu
-    elif 5.0 <= distance < 10.0:
+    else:
+
+        # Brak oporu ≠ automatycznie idealny breakout.
         score += 2
+
         add_reason(
             reasons,
             "Resistance",
             2,
-            f"Bezpieczny odstęp od oporu ({distance:.1f}%)",
-        )
-
-    # 4. Dużo miejsca (>= 10.0%) — Otwarta przestrzeń
-    elif distance >= 10.0:
-        score += 5
-        add_reason(
-            reasons,
-            "Resistance",
-            5,
-            f"Dużo miejsca do najbliższego oporu ({distance:.1f}%)",
+            "Brak wiarygodnego oporu powyżej ceny"
         )
 
     return score, reasons
@@ -641,6 +762,7 @@ def score_volume(analysis):
     )
 
     if vol_ratio >= 2.0:
+
         if price_rising:
             score += 5
             add_reason(
@@ -650,15 +772,15 @@ def score_volume(analysis):
                 f"Wysoki wolumen potwierdza wzrost ({vol_ratio:.1f}x średniej)"
             )
         else:
-            score += 0
             add_reason(
                 reasons,
                 "Volume",
                 0,
-                f"Wysoki wolumen, ale brak potwierdzenia wzrostem ceny ({vol_ratio:.1f}x)"
+                f"Wysoki wolumen bez potwierdzenia wzrostem ceny ({vol_ratio:.1f}x)"
             )
 
     elif vol_ratio >= 1.2:
+
         if price_rising:
             score += 3
             add_reason(
@@ -677,6 +799,7 @@ def score_volume(analysis):
             )
 
     elif vol_ratio < 0.6:
+
         score -= 1
         add_reason(
             reasons,
@@ -701,7 +824,7 @@ def score_stoch(analysis):
     d = safe_float(getattr(analysis, "stoch_d", None))
 
     prev_k = safe_float(getattr(analysis, "prev_stoch_k", None))
-    prev_d = safe_float(getattr(analysis, "prev_d", None))
+    prev_d = safe_float(getattr(analysis, "prev_stoch_d", None))
 
     if k is None or d is None:
         return score, reasons
@@ -722,48 +845,61 @@ def score_stoch(analysis):
         and k < d
     )
 
-    # 1. Świeży sygnał przecięcia (Trigger)
+    # -------------------------------------------------------------
+    # HIERARCHICZNA KLASYFIKACJA
+    # -------------------------------------------------------------
+
     if bullish_cross and trend in ("UP", "STRONG_UP"):
+
         score += 5
+
         add_reason(
             reasons,
             "Stochastic",
             5,
-            f"Bycze przecięcie Stochastic (%K: {k:.1f})",
-        )
-    elif bearish_cross:
-        score -= 2
-        add_reason(
-            reasons,
-            "Stochastic",
-            -2,
-            f"Niedźwiedzie przecięcie Stochastic (%K: {k:.1f})",
+            f"Bycze przecięcie Stochastic (%K: {k:.1f})"
         )
 
-    # 2. Ocena poziomu (Wyprzedanie / Wykupienie / Neutralny)
-    if k < 20 and d < 20 and trend in ("UP", "STRONG_UP"):
+    elif k < 20 and d < 20 and trend in ("UP", "STRONG_UP"):
+
         score += 4
+
         add_reason(
             reasons,
             "Stochastic",
             4,
-            f"Stochastic wyprzedany w trendzie (%K: {k:.1f})",
+            f"Stochastic wyprzedany w trendzie (%K: {k:.1f})"
         )
-    elif k > 80:
+
+    elif bearish_cross:
+
         score -= 2
+
         add_reason(
             reasons,
             "Stochastic",
             -2,
-            f"Stochastic wykupiony (%K: {k:.1f})",
+            f"Niedźwiedzie przecięcie Stochastic (%K: {k:.1f})"
         )
-    elif not bullish_cross and not bearish_cross:
-        # Stan neutralny (20 <= k <= 80) bez przecięcia
+
+    elif k > 80:
+
+        score -= 2
+
+        add_reason(
+            reasons,
+            "Stochastic",
+            -2,
+            f"Stochastic wykupiony (%K: {k:.1f})"
+        )
+
+    else:
+
         add_reason(
             reasons,
             "Stochastic",
             0,
-            f"Stochastic w strefie neutralnej (%K: {k:.1f})",
+            f"Stochastic w strefie neutralnej (%K: {k:.1f})"
         )
 
     return score, reasons
@@ -771,43 +907,82 @@ def score_stoch(analysis):
 
 # =====================================================================
 # EXTENSION + BOLLINGER
-# MAX: 3 pkt
+# MAX: 5 pkt
+#
+# Tutaj oceniamy zdrowie struktury względem EMA20,
+# a nie bezpośrednią atrakcyjność wejścia.
 # =====================================================================
 
 def score_extension(analysis):
     score = 0
     reasons = []
 
-    dist_ema20 = safe_float(getattr(analysis, "dist_ema20_pct", None))
-    close = safe_float(getattr(analysis, "price", None))
+    dist_ema20 = safe_float(
+        getattr(analysis, "dist_ema20_pct", None)
+    )
 
-    bb_upper = safe_float(getattr(analysis, "bb_upper", None))
-    bb_lower = safe_float(getattr(analysis, "bb_lower", None))
+    close = safe_float(
+        getattr(analysis, "price", None)
+    )
+
+    bb_upper = safe_float(
+        getattr(analysis, "bb_upper", None)
+    )
+
+    bb_lower = safe_float(
+        getattr(analysis, "bb_lower", None)
+    )
 
     trend = get_trend_value(analysis)
 
+    # -------------------------------------------------------------
+    # EMA20
+    #
+    # WAŻNE:
+    # abs() nie jest już używane.
+    #
+    # + punkty tylko wtedy, gdy cena znajduje się NAD EMA20.
+    # -------------------------------------------------------------
+
     if dist_ema20 is not None:
-        abs_dist = abs(dist_ema20)
-        if 0 <= abs_dist <= 2:
+
+        if 0 <= dist_ema20 <= 2:
+
             score += 3
+
             add_reason(
                 reasons,
                 "Extension",
                 3,
-                f"Cena blisko EMA20 ({dist_ema20:.1f}%)"
+                f"Cena zdrowo utrzymuje się nad EMA20 ({dist_ema20:.1f}%)"
             )
 
-        elif 2 < abs_dist <= 4:
+        elif 2 < dist_ema20 <= 4:
+
+            score += 2
+
+            add_reason(
+                reasons,
+                "Extension",
+                2,
+                f"Cena umiarkowanie oddalona nad EMA20 ({dist_ema20:.1f}%)"
+            )
+
+        elif 4 < dist_ema20 <= 8:
+
             score += 1
+
             add_reason(
                 reasons,
                 "Extension",
                 1,
-                f"Cena umiarkowanie oddalona od EMA20 ({dist_ema20:.1f}%)"
+                f"Cena oddalona nad EMA20 ({dist_ema20:.1f}%)"
             )
 
-        elif abs_dist > 8:
+        elif dist_ema20 > 8:
+
             score -= 3
+
             add_reason(
                 reasons,
                 "Extension",
@@ -815,28 +990,51 @@ def score_extension(analysis):
                 f"Cena mocno rozciągnięta nad EMA20 ({dist_ema20:.1f}%)"
             )
 
-    if close is not None and bb_upper is not None:
-        if close >= bb_upper:
-            score -= 2
+        else:
+
+            # Cena poniżej EMA20.
+            # Nie karzemy tutaj drugi raz — EMA alignment już to ocenia.
+
             add_reason(
                 reasons,
-                "Bollinger",
-                -2,
-                "Cena przy górnej wstędze Bollingera — ryzyko przegrzania"
+                "Extension",
+                0,
+                f"Cena znajduje się poniżej EMA20 ({dist_ema20:.1f}%)"
             )
 
+    # -------------------------------------------------------------
+    # BOLLINGER
+    # -------------------------------------------------------------
+
     if (
+        close is not None
+        and bb_upper is not None
+        and close >= bb_upper
+    ):
+
+        score -= 2
+
+        add_reason(
+            reasons,
+            "Bollinger",
+            -2,
+            "Cena przy górnej wstędze Bollingera — ryzyko przegrzania"
+        )
+
+    elif (
         close is not None
         and bb_lower is not None
         and close <= bb_lower
         and trend in ("UP", "STRONG_UP")
     ):
+
         score += 1
+
         add_reason(
             reasons,
             "Bollinger",
             1,
-            "Cena przy dolnej wstędze podczas trendu wzrostowego — możliwa korekta"
+            "Cena przy dolnej wstędze podczas trendu wzrostowego"
         )
 
     return score, reasons
@@ -856,7 +1054,9 @@ def score_obv(analysis):
     obv_bearish_div = getattr(analysis, "obv_bearish_div", False)
 
     if obv_bullish_div:
+
         score += 5
+
         add_reason(
             reasons,
             "OBV",
@@ -865,7 +1065,9 @@ def score_obv(analysis):
         )
 
     elif obv_rising:
+
         score += 3
+
         add_reason(
             reasons,
             "OBV",
@@ -873,21 +1075,24 @@ def score_obv(analysis):
             "OBV rośnie — ruch ceny ma potwierdzenie wolumenowe"
         )
 
-    else:
-        add_reason(
-            reasons,
-            "OBV",
-            0,
-            "Brak wyraźnego potwierdzenia ze strony OBV"
-        )
+    elif obv_bearish_div:
 
-    if obv_bearish_div:
         score -= 5
+
         add_reason(
             reasons,
             "OBV",
             -5,
             "Niedźwiedzia dywergencja OBV — ryzyko słabnięcia ruchu"
+        )
+
+    else:
+
+        add_reason(
+            reasons,
+            "OBV",
+            0,
+            "Brak wyraźnego potwierdzenia ze strony OBV"
         )
 
     return score, reasons

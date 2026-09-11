@@ -13,15 +13,20 @@ class InvalidTickerError(Exception):
 
 
 def get_instrument_info(symbol: str) -> dict:
-    stock = yf.Ticker(symbol)
-    info = stock.info or {}
+    
+   #info = stock.info or {}
     try:
+        stock = yf.Ticker(symbol)
+        info = stock.info or {}
         calendar = stock.calendar
         if calendar is not None:
             # Sygnalizuje datę nadchodzących wyników
             earnings_date = calendar.get("Earnings Date")
     except Exception as e:
         earnings_date = None
+        info = {}
+
+    is_etf = info.get("quoteType") == "ETF"
 
     instrument = {
         "symbol": symbol.upper(),
@@ -66,7 +71,7 @@ def get_instrument_info(symbol: str) -> dict:
         "enterpriseToEbitda": info.get("enterpriseToEbitda"),
 
         # --- Dywidendy ---
-        "dividendYield": info.get("dividendYield"),
+        "dividendYield": info.get("dividendYield") if not is_etf else info.get("yield") or info.get("dividendYield", 0.0) or info.get("trailingAnnualDividendYield"),
         "exDividendDate": info.get("exDividendDate"),
         "payoutRatio": info.get("payoutRatio"),
         
