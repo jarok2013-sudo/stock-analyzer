@@ -80,7 +80,7 @@ class NumberedCanvas(canvas.Canvas):
         page_width, page_height = self._pagesize
         margin = 20
 
-        # 1. NAGŁÓWEK (Po polsku)
+        # 1. NAGŁÓWEK
         self.setFont(FONT_NAME, 6.5)
         self.setFillColor(colors.HexColor("#fe0808"))
 
@@ -95,7 +95,7 @@ class NumberedCanvas(canvas.Canvas):
         self.setLineWidth(0.5)
         self.line(margin, page_height - 24, page_width - margin, page_height - 24)
 
-        # 2. STOPKA (Po angielsku + Numeracja "Strona X z Y")
+        # 2. STOPKA
         self.line(margin, 27, page_width - margin, 27)
 
         self.setFont(FONT_NAME, 6)
@@ -106,7 +106,7 @@ class NumberedCanvas(canvas.Canvas):
         self.drawString(margin, 18, footer_line1)
         self.drawString(margin, 8, footer_line2)
 
-        # Numeracja stron po prawej stronie
+        # Numeracja stron
         self.setFillColor(colors.HexColor("#8b949e"))
         page_text = f"Strona {self._pageNumber} z {page_count}"
         self.drawRightString(page_width - margin, 18, page_text)
@@ -122,6 +122,7 @@ def generate_pdf_report(analysis, filename=None):
     symbol = getattr(analysis, "symbol", "WALOR")
     info = getattr(analysis, "instrument_info", {}) or {}
     currency = info.get("currency", "PLN")
+    is_etf = getattr(analysis, "is_etf", False)
 
     OUTPUT_PDF_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -158,7 +159,7 @@ def generate_pdf_report(analysis, filename=None):
     cell_bold = ParagraphStyle("CellBold", parent=cell_style, fontName=FONT_BOLD)
 
     # -------------------------------------------------------------------------
-    # STRONA 1: NAGŁÓWEK + WYKRES DETALICZNY 90 DNI (BOLLINGER BANDS + RSI)
+    # STRONA 1: NAGŁÓWEK + FUNDAMENTY / ETF + WYKRES DETALICZNY (90 DNI)
     # -------------------------------------------------------------------------
     full_name = info.get("longName", symbol)
     header_table = Table([[Paragraph(f"📊 ANALIZA TECHNICZNA: {symbol} - {full_name}", title_style)]], colWidths=[525])
@@ -171,7 +172,26 @@ def generate_pdf_report(analysis, filename=None):
     story.append(Spacer(1, 4))
 
     # --- DANE Z YAHOO FINANCE & WYCENA ---
-    if info:
+    if is_etf:
+        story.append(Paragraph("<b>INFORMACJA O INSTRUMENCIE (ETF / FUNDUSZ)</b>", section_title))
+        etf_text = (
+            "ℹ️ <b>Instrument rozpoznany jako ETF / Fundusz Notowany na Giełdzie.</b><br/>"
+            "ℹ️ Sentyment analityków oraz wskaźniki fundamentalne (C/Z, ROE, ROA) zostały wyłączone z oceny.<br/>"
+            f"ℹ️ Waga wskaźnika Pewności została automatycznie przeniesiona na <b>Quality Score</b> "
+            f"({getattr(analysis, 'quality_score', 0)} pkt) oraz <b>Entry Score</b> ({getattr(analysis, 'entry_score', 0)} pkt)."
+        )
+        t_etf = Table([[Paragraph(etf_text, cell_style)]], colWidths=[525])
+        t_etf.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), COLOR_CARD_BG),
+            ("BOX", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        story.append(t_etf)
+        story.append(Spacer(1, 4))
+    elif info:
         mcap = info.get("marketCap")
         current_price = info.get("currentPrice") or info.get("regularMarketPrice")
         
@@ -263,49 +283,162 @@ def generate_pdf_report(analysis, filename=None):
         story.append(Image(chart_short_buf, width=525, height=195))
         story.append(Spacer(1, 4))
 
-    # Drabina cenowa
+    # -------------------------------------------------------------------------
+    # DYNAMICZNA DRABINA POZIOMÓW CENOWYCH
+    # -------------------------------------------------------------------------
     story.append(Paragraph("<b>DRABINA POZIOMÓW CENOWYCH</b>", section_title))
     price = getattr(analysis, "price", 0.0)
+    trade_levels = getattr(analysis, "trade_levels", {}) or {}
     levels = []
 
-    res = getattr(analysis, "nearest_resistance", None)
-    if res and res.get("price"):
-        dist = getattr(analysis, "resistance_distance", 0) or 0
-        levels.append({"price": res["price"], "label": f"OPÓR [{res.get('touches', 1)}x]", "detail": f"Odstęp: {dist:.2f}%", "type": "RES"})
+    # 1. TARGETY ANALITYKÓW
+    if not is_etf:
+        target_defs = [
+            ("targetHighPrice", "🏛️ TARGET MAX (Analitycy)", "MAX"),
+            ("targetMeanPrice", "🏛️ TARGET ŚREDNI (Analitycy)", "AVG"),
+            ("targetLowPrice", "🏛️ TARGET MIN (Analitycy)", "MIN"),
+        ]
 
+        for key, label_base, t_type in target_defs:
+            t_price = info.get(key, None)
+            if t_price is not None and t_price > 0:
+                dist_target = ((t_price - price) / price) * 100
+                if t_price >= price:
+                    detail_str = f"Potencjał: +{dist_target:.2f}%"
+                    label_str = label_base
+                else:
+                    detail_str = f"Cena wyżej o: {abs(dist_target):.2f}%"
+                    label_str = label_base.replace("🏛️", "⚠️")
+
+                levels.append({
+                    "price": t_price,
+                    "label": label_str,
+                    "detail": detail_str,
+                    "type": "TARGET",
+                })
+
+    # 2. OPORY NAD CENĄ
+    tp2_val = trade_levels.get("tp2")
+    rated_resistances = getattr(analysis, "rated_resistances", [])
+
+    resistances_above = [
+        r for r in rated_resistances
+        if isinstance(r, dict) and r.get("price") is not None and float(r["price"]) > price
+    ]
+    # POPRAWKA SYNTAX ERROR (lambda x:)
+    resistances_above.sort(key=lambda x: float(x["price"]))
+
+    for r in resistances_above:
+        r_price = float(r["price"])
+        tests = r.get("touches", 1)
+        dist = ((r_price - price) / price) * 100
+        is_obstacle = (tp2_val is not None and r_price < (tp2_val - 0.01))
+
+        if is_obstacle:
+            label = f"🔴 OPÓR / PRZESZKODA [do TP2] [{tests}x]"
+        else:
+            label = f"🔴 OPÓR (Resistance) [{tests}x]"
+
+        levels.append({
+            "price": r_price,
+            "label": label,
+            "detail": f"Odstęp: +{dist:.2f}%",
+            "type": "RES",
+        })
+
+    # 3. PRZEBITE OPORY / STREFY RE-TESTU (FLIP SUPPORT)
+    broken_resistances = [
+        r for r in rated_resistances
+        if isinstance(r, dict) and r.get("price") is not None and float(r["price"]) <= price
+    ]
+
+    if broken_resistances:
+        last_broken = max(broken_resistances, key=lambda x: float(x["price"]))
+        b_price = float(last_broken["price"])
+        dist_b = ((price - b_price) / price) * 100
+        supp_price = getattr(analysis, "nearest_support", {}).get("price") if getattr(analysis, "nearest_support", None) else None
+
+        if not supp_price or abs(b_price - float(supp_price)) > 0.01:
+            levels.append({
+                "price": b_price,
+                "label": "🟢 NOWE WSPARCIE (Dawny Opór/Flip)",
+                "detail": f"Odstęp: -{dist_b:.2f}%",
+                "type": "SUP_FLIP",
+            })
+
+    # 4. GŁÓWNE WSPARCIE
     supp = getattr(analysis, "nearest_support", None)
     if supp and supp.get("price"):
+        sup_p = supp["price"]
+        tests = supp.get("touches", 1)
         dist = getattr(analysis, "support_distance", 0) or 0
-        levels.append({"price": supp["price"], "label": f"WSPARCIE [{supp.get('touches', 1)}x]", "detail": f"Odstęp: {dist:.2f}%", "type": "SUP"})
+        levels.append({
+            "price": sup_p,
+            "label": f"🟢 WSPARCIE (Support) [{tests}x]",
+            "detail": f"Odstęp: -{dist:.2f}%",
+            "type": "SUP",
+        })
 
-    tp_val = getattr(analysis, "take_profit", None)
-    if tp_val is not None:
-        dist_tp = ((tp_val - price) / price) * 100 if price else 0
-        levels.append({"price": tp_val, "label": "🎯 TAKE PROFIT (TP)", "detail": f"Zysk: +{dist_tp:.2f}%", "type": "TP"})
+    # 5. TAKE PROFIT (TP1 & TP2)
+    for tp_name in ["tp1", "tp2"]:
+        tp_val = trade_levels.get(tp_name)
+        tp_rr = trade_levels.get(f"rr_{tp_name}", "")
 
-    sl_val = getattr(analysis, "stop_loss", None)
+        if tp_val is not None:
+            matching_res = next(
+                (lvl for lvl in levels if lvl["type"] == "RES" and abs(lvl["price"] - tp_val) < 0.01),
+                None
+            )
+            if matching_res:
+                matching_res["label"] += f" 🎯 [TP: {tp_name.upper()} (RR={tp_rr})]"
+            else:
+                dist_tp = ((tp_val - price) / price) * 100
+                levels.append({
+                    "price": tp_val,
+                    "label": f"🎯 TAKE PROFIT ({tp_name.upper()}) (RR={tp_rr})",
+                    "detail": f"Zysk: {dist_tp:+.2f}%",
+                    "type": "TP",
+                })
+
+    # 6. STOP LOSS (SL)
+    sl_val = _safe_number(trade_levels.get("stop_loss"))
     if sl_val is not None:
-        dist_sl = ((price - sl_val) / price) * 100 if price else 0
-        levels.append({"price": sl_val, "label": "🛑 STOP LOSS (SL)", "detail": f"Ryzyko: -{dist_sl:.2f}%", "type": "SL"})
+        dist_sl = ((price - sl_val) / price) * 100
+        levels.append({
+            "price": sl_val,
+            "label": "🛑 STOP LOSS (SL)",
+            "detail": f"Ryzyko: -{dist_sl:.2f}%",
+            "type": "SL",
+        })
 
+    # 7. ŚREDNIE EMA
     for ema_name in ["ema20", "ema50", "ema200"]:
         ema_val = getattr(analysis, ema_name, None)
         if ema_val is not None:
-            levels.append({"price": ema_val, "label": f"{ema_name.upper()}<sup>10</sup>", "detail": "Średnia", "type": "EMA"})
+            dist_ema = ((ema_val - price) / price) * 100
+            levels.append({
+                "price": ema_val,
+                "label": f"🔷 {ema_name.upper()}",
+                "detail": f"Średnia ({dist_ema:+.2f}%)",
+                "type": "EMA",
+            })
 
-    levels.append({"price": price, "label": "AKTUALNA CENA", "detail": "Rynkowa", "type": "PRICE"})
+    # 8. AKTUALNA CENA
+    levels.append({
+        "price": price,
+        "label": "💲 AKTUALNA CENA",
+        "detail": "Rynkowa",
+        "type": "PRICE",
+    })
 
-    target_p = getattr(analysis, "target_mean_price", None)
-    if target_p is not None:
-        dist_target = ((target_p - price) / price) * 100 if price else 0
-        levels.append({"price": target_p, "label": "🎯 TARGET ANALITYKÓW", "detail": f"Potencjał: {dist_target:+.2f}%", "type": "TARGET"})
-
+    # Sortowanie malejąco po cenie
     levels.sort(key=lambda x: x["price"], reverse=True)
 
     color_map = {
         "RES": COLOR_RED,
         "SL": COLOR_RED,
         "SUP": COLOR_GREEN,
+        "SUP_FLIP": COLOR_GREEN,
         "TP": COLOR_GREEN,
         "TARGET": COLOR_TARGET,
     }
@@ -339,11 +472,19 @@ def generate_pdf_report(analysis, filename=None):
 
     # Parametry transakcji + Checklista
     trade_signal = getattr(analysis, "trade_signal", "NEUTRAL")
-    trade_levels = getattr(analysis, "trade_levels", {}) or {}
     trade_rr = _safe_number(trade_levels.get("rr_tp2"))
     rr_str = f"{trade_rr:.2f}" if trade_rr is not None else "N/A"
     atr_val = getattr(analysis, "atr", None)
     atr_str = f"{atr_val:.2f} {currency}" if atr_val is not None else "N/A"
+
+    tp1_v = trade_levels.get("tp1")
+    tp2_v = trade_levels.get("tp2")
+    if tp1_v and tp2_v:
+        tp_display = f"{tp1_v:.2f} / {tp2_v:.2f} {currency}"
+    elif tp1_v:
+        tp_display = f"{tp1_v:.2f} {currency}"
+    else:
+        tp_display = "N/A"
 
     trade_text = [
         Paragraph("<b>PARAMETRY TRANSAKCJI</b>", cell_bold),
@@ -352,7 +493,7 @@ def generate_pdf_report(analysis, filename=None):
         Paragraph(f"<b>R/R Ratio<sup>9</sup>:</b> {rr_str}", cell_style),
         Paragraph(f"<b>Zmienność ATR<sup>8</sup>:</b> {atr_str}", cell_style),
         Paragraph(f"<b>Stop Loss:</b> {sl_val:.2f} {currency}" if sl_val else "<b>Stop Loss:</b> N/A", ParagraphStyle("SL_Txt", parent=cell_style, textColor=COLOR_RED)),
-        Paragraph(f"<b>Take Profit:</b> {tp_val:.2f} {currency}" if tp_val else "<b>Take Profit:</b> N/A", ParagraphStyle("TP_Txt", parent=cell_style, textColor=COLOR_GREEN)),
+        Paragraph(f"<b>Take Profit (TP1/TP2):</b> {tp_display}", ParagraphStyle("TP_Txt", parent=cell_style, textColor=COLOR_GREEN)),
     ]
 
     chk_text = [Paragraph("<b>CHECKLISTA SYGNAŁOWA</b>", cell_bold), Spacer(1, 2)]
@@ -388,7 +529,7 @@ def generate_pdf_report(analysis, filename=None):
     story.append(bottom_table)
 
     # -------------------------------------------------------------------------
-    # STRONA 2: WYKRES LONG-TERM 360 DNI (EMA + MACD) + OZNACZENIA SCORE
+    # STRONA 2: WYKRES LONG-TERM 360 DNI + OCENY SCORE
     # -------------------------------------------------------------------------
     story.append(PageBreak())
 
@@ -406,12 +547,24 @@ def generate_pdf_report(analysis, filename=None):
         story.append(Image(chart_long_buf, width=525, height=210))
         story.append(Spacer(1, 8))
 
-    # Sekcja Score'ów
+    # Sekcja Score'ów z obsługą ATH
     quality_score = getattr(analysis, "quality_score", 0)
     quality_desc = "<font color='#16a34a'>● Top okazja</font>" if quality_score >= 80 else ("<font color='#d97706'>● Dobra spółka</font>" if quality_score >= 65 else "<font color='#dc2626'>● Słaba / Omijaj</font>")
 
     entry_score = getattr(analysis, "entry_score", 0)
-    entry_desc = "<font color='#16a34a'>● KUPUJ</font>" if entry_score >= 80 else ("<font color='#d97706'>● OBSERWUJ</font>" if entry_score >= 65 else "<font color='#dc2626'>● ZAKAZ WEJŚCIA</font>")
+    is_ath = getattr(analysis, "is_ath", False) or len(resistances_above) == 0
+
+    if entry_score >= 80:
+        entry_desc = "<font color='#16a34a'>● KUPUJ / SPUST POLUZOWANY</font>"
+    elif entry_score >= 65:
+        entry_desc = "<font color='#d97706'>● OBSERWUJ / GOTOWOŚĆ</font>"
+    elif entry_score >= 50:
+        entry_desc = "<font color='#718096'>● NEUTRALNY / SPASUJ</font>"
+    else:
+        if is_ath:
+            entry_desc = "<font color='#dc2626'>● ZAKAZ WEJŚCIA (Wykupienie / Ryzyko korekty po ATH)</font>"
+        else:
+            entry_desc = "<font color='#dc2626'>● ZAKAZ WEJŚCIA (Kupno pod oporem / Zły moment)</font>"
 
     q_content = [Paragraph(f"<b>QUALITY SCORE: {quality_score}/100</b> | {quality_desc}", cell_bold), Spacer(1, 4)]
     for reason in getattr(analysis, "quality_reasons", []):
@@ -439,7 +592,7 @@ def generate_pdf_report(analysis, filename=None):
     story.append(scores_table)
     story.append(Spacer(1, 6))
 
-    # Objaśnienia wskaźników (Legenda)
+    # Objaśnienia wskaźników
     legend_style = ParagraphStyle(
         'LegendText',
         parent=styles['Normal'],
