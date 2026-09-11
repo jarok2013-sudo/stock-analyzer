@@ -30,6 +30,13 @@ venv/
 !portfolios/positions.json
 !requirements.txt
 
+#portfele
+!portfolios/default.json
+!portfolios/pl.json
+!portfolios/watchlist.json
+!portfolios/etfb.json
+
+
 #raport
 !reports/
 !reports/pdf_generator.py
@@ -57,3 +64,6 @@ venv/
 !utils/patterns.py
 !utils/resistance.py
 !utils/supprts.py
+!utils/levels.py
+!utils/dynamic_levels.py
+

@@ -19,7 +19,6 @@ from reportlab.platypus import (
     Spacer,
     Table,
     TableStyle,
-    Flowable,
 )
 
 from charts.chart_builder import ChartBuilder
@@ -100,11 +99,10 @@ class NumberedCanvas(canvas.Canvas):
         self.line(margin, 27, page_width - margin, 27)
 
         self.setFont(FONT_NAME, 6)
-        self.setFillColor(colors.HexColor("#8b949e"))
+        self.setFillColor(colors.HexColor("#fe0808"))
 
         footer_line1 = "Disclaimer: For informational and educational purposes only. Not financial advice."
         footer_line2 = "Investments carry risk of loss — if you win, share the gains; if you lose, it's on you — use at your own risk. Project code: https://github.com/jarok2013-sudo/stock-analyzer"
-        self.setFillColor(colors.HexColor("#fe0808"))
         self.drawString(margin, 18, footer_line1)
         self.drawString(margin, 8, footer_line2)
 
@@ -174,8 +172,8 @@ def generate_pdf_report(analysis, filename=None):
 
     # --- DANE Z YAHOO FINANCE & WYCENA ---
     if info:
-        mcap = info.get("marketCap") or (info.get("marketCap"))
-        current_price = info.get("currentPrice") or (info.get("regularMarketPrice"))
+        mcap = info.get("marketCap")
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice")
         
         story.append(Paragraph("<b>WYCENA SPÓŁKI I WSKAŹNIKI FUNDAMENTALNE</b>", section_title))
         
@@ -304,24 +302,27 @@ def generate_pdf_report(analysis, filename=None):
 
     levels.sort(key=lambda x: x["price"], reverse=True)
 
+    color_map = {
+        "RES": COLOR_RED,
+        "SL": COLOR_RED,
+        "SUP": COLOR_GREEN,
+        "TP": COLOR_GREEN,
+        "TARGET": COLOR_TARGET,
+    }
+
     ladder_table_data = []
     for lvl in levels:
         p_str = f"{lvl['price']:.2f} {currency}"
         if lvl["type"] == "PRICE":
             ladder_table_data.append([
-                Paragraph(f"<b>► {lvl['label']}</b>", ParagraphStyle("P", parent=cell_bold, textColor=COLOR_PRICE)),
-                Paragraph(f"<b>{p_str}</b>", ParagraphStyle("P", parent=cell_bold, textColor=COLOR_PRICE)),
-                Paragraph(f"<b>{lvl['detail']}</b>", ParagraphStyle("P", parent=cell_bold, textColor=COLOR_PRICE)),
+                Paragraph(f"<b>► {lvl['label']}</b>", ParagraphStyle("P_Price", parent=cell_bold, textColor=COLOR_PRICE)),
+                Paragraph(f"<b>{p_str}</b>", ParagraphStyle("P_PriceVal", parent=cell_bold, textColor=COLOR_PRICE)),
+                Paragraph(f"<b>{lvl['detail']}</b>", ParagraphStyle("P_PriceDet", parent=cell_bold, textColor=COLOR_PRICE)),
             ])
         else:
-            col = (
-    COLOR_RED if lvl["type"] in ["RES", "SL"]
-    else COLOR_GREEN if lvl["type"] in ["SUP", "TP"]
-    else COLOR_TARGET if lvl["type"] == "TARGET"
-    else COLOR_PRIMARY
-)
+            col = color_map.get(lvl["type"], COLOR_PRIMARY)
             ladder_table_data.append([
-                Paragraph(lvl["label"], ParagraphStyle("L", parent=cell_bold, textColor=col)),
+                Paragraph(lvl["label"], ParagraphStyle(f"L_{lvl['type']}", parent=cell_bold, textColor=col)),
                 Paragraph(p_str, cell_bold),
                 Paragraph(lvl["detail"], cell_style),
             ])
@@ -338,7 +339,8 @@ def generate_pdf_report(analysis, filename=None):
 
     # Parametry transakcji + Checklista
     trade_signal = getattr(analysis, "trade_signal", "NEUTRAL")
-    trade_rr = _safe_number(analysis.trade_levels["rr_tp2"])
+    trade_levels = getattr(analysis, "trade_levels", {}) or {}
+    trade_rr = _safe_number(trade_levels.get("rr_tp2"))
     rr_str = f"{trade_rr:.2f}" if trade_rr is not None else "N/A"
     atr_val = getattr(analysis, "atr", None)
     atr_str = f"{atr_val:.2f} {currency}" if atr_val is not None else "N/A"
@@ -347,10 +349,10 @@ def generate_pdf_report(analysis, filename=None):
         Paragraph("<b>PARAMETRY TRANSAKCJI</b>", cell_bold),
         Spacer(1, 2),
         Paragraph(f"<b>Sygnał:</b> {trade_signal}", cell_style),
-        Paragraph(f"<b>R/R Ratio<sup>9</sup><:</b> {rr_str}", cell_style),
+        Paragraph(f"<b>R/R Ratio<sup>9</sup>:</b> {rr_str}", cell_style),
         Paragraph(f"<b>Zmienność ATR<sup>8</sup>:</b> {atr_str}", cell_style),
-        Paragraph(f"<b>Stop Loss:</b> {sl_val:.2f} {currency}" if sl_val else "<b>Stop Loss:</b> N/A", ParagraphStyle("SL", parent=cell_style, textColor=COLOR_RED)),
-        Paragraph(f"<b>Take Profit:</b> {tp_val:.2f} {currency}" if tp_val else "<b>Take Profit:</b> N/A", ParagraphStyle("TP", parent=cell_style, textColor=COLOR_GREEN)),
+        Paragraph(f"<b>Stop Loss:</b> {sl_val:.2f} {currency}" if sl_val else "<b>Stop Loss:</b> N/A", ParagraphStyle("SL_Txt", parent=cell_style, textColor=COLOR_RED)),
+        Paragraph(f"<b>Take Profit:</b> {tp_val:.2f} {currency}" if tp_val else "<b>Take Profit:</b> N/A", ParagraphStyle("TP_Txt", parent=cell_style, textColor=COLOR_GREEN)),
     ]
 
     chk_text = [Paragraph("<b>CHECKLISTA SYGNAŁOWA</b>", cell_bold), Spacer(1, 2)]
@@ -435,37 +437,33 @@ def generate_pdf_report(analysis, filename=None):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
     story.append(scores_table)
+    story.append(Spacer(1, 6))
 
-    # 2. Przykład przygotowania sekcji objaśnień (Legendy) na dole raportu
-    styles = getSampleStyleSheet()
-    styles["Normal"].fontName = FONT_NAME
-
-    # Styl dla indeksów i legendy
+    # Objaśnienia wskaźników (Legenda)
     legend_style = ParagraphStyle(
         'LegendText',
         parent=styles['Normal'],
+        fontName=FONT_NAME,
         fontSize=7.5,
         leading=9.5,
         textColor=colors.HexColor("#8b949e")
-)
+    )
     legend_html = """
     <b>Objaśnienia wskaźników:</b><br/>
     <sup>1</sup><b>C/Z (P/E)</b>: Stosunek ceny do zysku. Niska wartość wskazuje na potencjalną taniość spółki.<br/>
-    Trailing P/E (Historyczne): Oparte na twardych danych z ostatnich 12 miesięcy.
-    Forward P/E (Przyszłe): Oparte na prognozach analityków. Jest to kluczowa miara biznesowa – jeśli Forward P/E jest niższe od Trailing P/E, rynek spodziewa się realnego wzrostu zysków w przyszłości
-    <sup>2</sup><b>C/WK (P/B)</b>: Stosunek ceny do wartości księgowej. Poziom &lt; 1.0 oznacza wycenę poniżej majątku.<br/>
-    <sup>3</sup><b>ROA</b>: Rentowność aktywów. Określa efektywność wykorzystania majątku.Idealnie > 5-10%<br/>
-    <sup>4</sup><b>ROE</b>: Rentowność kapitału własnego. Mierzy stopę zwrotu dla akjonariuszy.Idealnie > 10-15%.<br/>
-    <sup>5</sup><b>Beta</b>: Wskaźnik wrażliwości na ruchy rynku (&lt; 1.0 oznacza niższą zmienność).<br/>
+    Trailing P/E (Historyczne): Oparte na danych z ostatnich 12 miesięcy. Forward P/E (Przyszłe): Oparte na prognozach analityków.<br/>
+    <sup>2</sup><b>C/WK (P/B)</b>: Stosunek ceny do wartości księgowej (&lt; 1.0 oznacza wycenę poniżej majątku).<br/>
+    <sup>3</sup><b>ROA</b>: Rentowność aktywów. Określa efektywność wykorzystania majątku (idealnie &gt; 5-10%).<br/>
+    <sup>4</sup><b>ROE</b>: Rentowność kapitału własnego (idealnie &gt; 10-15%).<br/>
+    <sup>5</sup><b>Beta</b>: Wrażliwość na ruchy rynku (&lt; 1.0 oznacza niższą zmienność).<br/>
     <sup>6</sup><b>RSI</b>: Oscylator siły względnej (30 = wyprzedanie, 70 = wykupienie).<br/>
     <sup>7</sup><b>MACD</b>: Wskaźnik impetu i kierunku trendu.<br/>
-    <sup>8</sup><b>ATR</b>: Średnia dzienna zmienność cenowa w PLN.<br/>
-    <sup>9</sup><b>R/R Ratio</b>: Stosunek zysku do ryzyka (wartość &gt; 2.0 oznacza atrakcyjny układ).<br/>
-    <sup>10</sup><b>EMA</b>: Wykładnicza średnia krocząca wyznaczająca dynamiczne wsparcia i opory.
+    <sup>8</sup><b>ATR</b>: Średnia dzienna zmienność cenowa.<br/>
+    <sup>9</sup><b>R/R Ratio</b>: Stosunek zysku do ryzyka (&gt; 2.0 oznacza atrakcyjny układ).<br/>
+    <sup>10</sup><b>EMA</b>: Wykładnicza średnia krocząca (wyznacza dynamiczne wsparcia i opory).
     """
 
-    legend_paragraph = Paragraph(legend_html, legend_style)
-    story.append(legend_paragraph)
+    story.append(Paragraph(legend_html, legend_style))
 
     doc.build(story, canvasmaker=NumberedCanvas)
     print(f" Wygenerowano PDF spółki: {target_path}")
@@ -495,7 +493,6 @@ def generate_summary_pdf_report(results: dict, portfolio_name: str = "default", 
     )
 
     styles = getSampleStyleSheet()
-    styles["Normal"].fontName = FONT_NAME
 
     title_style = ParagraphStyle(
         "DocTitle",
@@ -608,10 +605,10 @@ def generate_summary_pdf_report(results: dict, portfolio_name: str = "default", 
                 Paragraph(f"<font color='#f85149'>{sl_str}</font>", cell_style),
                 Paragraph(f"<font color='#3fb950'>{tp_str}</font>", cell_style),
                 Paragraph(rr_str, cell_bold),
-                Paragraph(str(item["q_score"]), cell_style),
-                Paragraph(str(item["e_score"]), cell_style),
-                Paragraph(f"<b>{item['total_score']:.1f}</b>", cell_style),
-                Paragraph(f"<font color='#f85149'>{item['trade_signal']}</font>", cell_bold),
+                Paragraph(str(item.get("q_score", "-")), cell_style),
+                Paragraph(str(item.get("e_score", "-")), cell_style),
+                Paragraph(f"<b>{item.get('total_score', 0):.1f}</b>", cell_style),
+                Paragraph(f"<font color='#f85149'>{item.get('trade_signal', '-')}</font>", cell_bold),
             ]
             table_data.append(row)
 
