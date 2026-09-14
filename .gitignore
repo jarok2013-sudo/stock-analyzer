@@ -68,3 +68,6 @@ venv/
 !utils/levels.py
 !utils/dynamic_levels.py
 
+#wykresy
+!charts/
+!charts/chart_builder.py
