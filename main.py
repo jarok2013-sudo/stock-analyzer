@@ -8,7 +8,7 @@ import pandas as pd
 # --- IMPORTY TWOICH MODUŁÓW ---
 from database import save_prices
 from download import fetch_data
-from knowledge.indicators import INDICATORS
+
 from models.stock_analysis import StockAnalysis
 from reports.report import Report
 from reports.report_pdf import generate_pdf_report
