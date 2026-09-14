@@ -63,7 +63,7 @@ venv/
 !utils/indicators.py
 !utils/patterns.py
 !utils/resistances.py
-!utils/supprts.py
+!utils/supports.py
 !utils/levels.py
 !utils/dynamic_levels.py
 
