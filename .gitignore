@@ -71,3 +71,7 @@ venv/
 #wykresy
 !charts/
 !charts/chart_builder.py
+
+#baza danych
+!data/
+!data/stocks_data.db

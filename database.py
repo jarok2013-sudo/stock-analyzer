@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
+import os
 from config import DB
 from utils.func import safe_date_str
 
@@ -223,38 +224,42 @@ def _load_fundamentals_from_db(symbol):
         pass
     return None
 
-def save_prices(symbol,data):
+def save_prices(symbol, data):
+    # 1. Sprawdzanie obecności bazy lub tabeli
+    if not os.path.exists(DB):
+        create_database()
 
     conn = sqlite3.connect(DB)
-
     cursor = conn.cursor()
 
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='prices';")
+    if not cursor.fetchone():
+        conn.close()
+        create_database()
+        conn = sqlite3.connect(DB)
+        cursor = conn.cursor()
 
+    # 2. Przygotowanie wsadowe danych (pod odporność na typ indeksu)
+    records = []
     for index, row in data.iterrows():
-
-        cursor.execute("""
-        INSERT OR IGNORE INTO prices
-        (
-        symbol,
-        date,
-        open,
-        high,
-        low,
-        close,
-        volume
-        )
-        VALUES (?,?,?,?,?,?,?)
-        """,
-
-        (
-        symbol,
-        index.strftime("%Y-%m-%d"),
-        float(row["open"]),
-        float(row["high"]),
-        float(row["low"]),
-        float(row["close"]),
-        int(row["volume"])
+        date_str = index.strftime("%Y-%m-%d") if hasattr(index, "strftime") else str(index)
+        
+        records.append((
+            symbol,
+            date_str,
+            float(row["open"]),
+            float(row["high"]),
+            float(row["low"]),
+            float(row["close"]),
+            int(row["volume"])
         ))
+
+    # 3. Zapis hurtowy (executemany) z pojedynczym commitem
+    cursor.executemany("""
+    INSERT OR IGNORE INTO prices
+    (symbol, date, open, high, low, close, volume)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, records)
 
     conn.commit()
     conn.close()
@@ -268,7 +273,7 @@ def create_database():
 
 
     cursor.execute("""
-        CREATE TABLE instruments (
+    CREATE TABLE instruments (
     symbol TEXT PRIMARY KEY,
     shortName TEXT,
     longName TEXT,
@@ -303,7 +308,6 @@ def create_database():
     averageVolume INTEGER,
     shortRatio REAL,
     heldPercentInstitutions REAL,
-    updatedAt DATETIME,
     currentPrice REAL, 
     marketCap REAL, 
     revenueGrowth REAL, 
@@ -315,7 +319,8 @@ def create_database():
     operatingCashflow REAL, 
     totalCash REAL, 
     enterpriseValue REAL, 
-    enterpriseToEbitda REAL)
+    enterpriseToEbitda REAL,
+    updatedAt DATETIME)
     """)
 
 
