@@ -1,0 +1,103 @@
+### Krok 1: Pobranie kodu z repozytorium (Git)
+
+Otwórz terminal (lub wiersz poleceń) i sklonuj projekt na swój komputer:
+
+```bash
+git clone https://github.com/jarok2013-sudo/stock-analyzer.git
+cd nazwa-repozytorium
+
+```
+
+---
+
+### Krok 2: Przygotowanie środowiska i instalacja zależności
+
+Utwórz wirtualne środowisko `venv` oraz zainstaluj wymagane pakiety (`yfinance`, `pandas`, `requests` itp.):
+
+* **Linux / macOS:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+```
+
+
+* **Windows (CMD / PowerShell):**
+```cmd
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+
+```
+
+
+
+---
+
+### Krok 3: Konfiguracja monitora pozycji (`monitor.py`)
+
+
+
+1. **Przygotowanie pliku pozycji:**
+Utwórz katalog `portfolios` oraz plik `portfolios/positions.json`:
+
+
+```json
+[
+  {
+    "symbol": "KGH.WA",
+    "buy_price": 334.50,
+    "stop_loss": 318.69,
+    "take_profit": 370.20
+  }
+]
+
+```
+
+
+2. **(Opcjonalnie) Powiadomienia Telegram:**
+Ustaw zmienne środowiskowe w systemie:
+
+
+```bash
+export TELEGRAM_BOT_TOKEN="Twój_Token_Bota"
+export TELEGRAM_CHAT_ID="Twój_Chat_ID"
+
+```
+
+
+
+---
+
+### Krok 4: Uruchomienie skryptów
+
+* **Analizator Rynku (Główny skrypt):**
+```bash
+python main.py
+
+```
+
+
+* Jednorazowy sprawdzian otwartych pozycji (Monitor):
+
+
+```bash
+python monitor.py
+
+```
+
+
+
+---
+
+### Krok 5: Automatyzacja monitora w tle (Ciągłe sprawdzanie)
+
+Aby skrypt `monitor.py` sam sprawdzał ceny (np. co 15 minut) w godzinach sesji giełdowej, możesz uruchomić go w pętli crona lub prostej harmonogramowej:
+
+* **Linux (Crontab — uruchamianie co 15 minut):**
+Aplikuj w `crontab -e`:
+```bash
+*/15 * * * 1-5 cd /sciezka/do/projekty && /sciezka/do/projekty/venv/bin/python monitor.py >> monitor.log 2>&1
+
+```

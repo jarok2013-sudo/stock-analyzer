@@ -335,61 +335,75 @@ def calculate_fundamental_score(analysis):
 
     return score, reasons
 
+import math
+
+
+# =====================================================================
+# POPRAWIONY FUNDAMENTAL SCORE DLA ETF
+# =====================================================================
+
 def calculate_fundamental_etf_score(analysis):
     """
-    Zastępcza analiza 'fundamentów' dla ETF na podstawie płynności (AUM),
-    stopy dywidendy oraz trendu długoterminowego (EMA200).
+    Fundamenty ETF oparte na wielkości funduszu (AUM), kosztach (TER) 
+    oraz polityce dywidendowej/płynnościowej.
     """
     score = 0
     reasons = []
-    info = analysis.instrument_info or {}
+    info = getattr(analysis, "instrument_info", {}) or {}
 
-    # 1. Wielkość funduszu (AUM / totalAssets) — max 30 pkt
+    # 1. Wielkość funduszu (AUM / totalAssets) — max 50 pkt
     aum = _number(info.get("totalAssets")) or 0
     if aum >= 500_000_000:
-        score += 30
-        _add_reason(reasons, 30, f"Bardzo wysokie aktywa AUM ({aum / 1e6:.1f}M)")
+        score += 50
+        _add_reason(reasons, 50, f"Bardzo wysokie aktywa AUM ({aum / 1e6:.1f}M)")
     elif aum >= 100_000_000:
-        score += 25
-        _add_reason(reasons, 25, f"Wysokie aktywa AUM ({aum / 1e6:.1f}M)")
+        score += 40
+        _add_reason(reasons, 40, f"Wysokie aktywa AUM ({aum / 1e6:.1f}M)")
     elif aum >= 10_000_000:
-        score += 15
-        _add_reason(reasons, 15, f"Umiarkowane aktywa AUM ({aum / 1e6:.1f}M)")
+        score += 25
+        _add_reason(reasons, 25, f"Umiarkowane aktywa AUM ({aum / 1e6:.1f}M)")
     elif aum > 0:
-        score += 5
-        _add_reason(reasons, 5, f"Niskie aktywa AUM ({aum / 1e6:.1f}M)")
+        score += 10
+        _add_reason(reasons, 10, f"Niskie aktywa AUM ({aum / 1e6:.1f}M)")
     else:
-        # Jeśli Yahoo nie ma pola totalAssets dla danego ETF (np. GPW), dajemy domyślną ocenę neutralną
-        score += 20
-        _add_reason(reasons, 20, "Brak danych AUM (Przyjęto poziom neutralny)")
+        score += 30
+        _add_reason(reasons, 30, "Brak danych AUM (Przyjęto poziom neutralny)")
 
-    # 2. Położenie ceny względem EMA200 — max 40 pkt
-    if hasattr(analysis, "df") and "ema200" in analysis.df.columns and not analysis.df["ema200"].dropna().empty:
-        latest_price = analysis.df["close"].iloc[-1]
-        ema200_val = analysis.df["ema200"].iloc[-1]
-
-        if latest_price > ema200_val:
-            score += 40
-            _add_reason(reasons, 40, "Cena znajduje się powyżej EMA200 (Trend hossy)")
-        else:
-            _add_reason(reasons, 0, "Cena poniżej EMA200 (Trend bessy)")
-    else:
-        score += 20
-        _add_reason(reasons, 20, "Brak danych EMA200 (Ocena neutralna)")
-
-    # 3. Nachylenie EMA200 (Długoterminowa dynamika) — max 30 pkt
-    if hasattr(analysis, "df") and "ema200" in analysis.df.columns and len(analysis.df) >= 20:
-        ema200_curr = analysis.df["ema200"].iloc[-1]
-        ema200_prev = analysis.df["ema200"].iloc[-20]
-
-        if math.isfinite(ema200_curr) and math.isfinite(ema200_prev) and ema200_curr > ema200_prev:
+    # 2. Opłaty za zarządzanie (TER) — max 30 pkt
+    ter = _number(info.get("annualReportExpenseRatio"))
+    if ter is not None:
+        if ter <= 0.0015:  # <= 0.15%
             score += 30
-            _add_reason(reasons, 30, "Średnia EMA200 rośnie (Długoterminowy trend wzrostowy)")
+            _add_reason(reasons, 30, f"Bardzo niskie koszty TER ({ter * 100:.2f}%)")
+        elif ter <= 0.0040:  # <= 0.40%
+            score += 20
+            _add_reason(reasons, 20, f"Niskie koszty TER ({ter * 100:.2f}%)")
         else:
-            _add_reason(reasons, 0, "Średnia EMA200 opada lub płaska")
+            score += 5
+            _add_reason(reasons, 5, f"Podwyższony koszt TER ({ter * 100:.2f}%)")
     else:
-        score += 15
-        _add_reason(reasons, 15, "Brak wystarczającej historii dla nachylenia EMA200")
+        score += 20
+        _add_reason(reasons, 20, "Brak danych o TER (Ocena neutralna)")
 
-    score = max(0, min(100, int(score)))
-    return score, reasons
+    # 3. Płynność rynkowa (Średni obrót) — max 20 pkt
+    avg_vol = _number(info.get("averageVolume3Month")) or 0
+    if avg_vol > 50_000:
+        score += 20
+        _add_reason(reasons, 20, "Wysoka płynność obrotu na giełdzie")
+    elif avg_vol > 5_000:
+        score += 10
+        _add_reason(reasons, 10, "Umiarkowana płynność obrotu")
+    else:
+        score += 5
+        _add_reason(reasons, 5, "Niska płynność obrotu")
+
+    final_score = max(0, min(100, int(score)))
+    
+    # Przypisanie pól do obiektu
+    analysis.fundamental_score = final_score
+    analysis.fundamental_reasons = reasons
+    return final_score, reasons
+
+
+
+

@@ -68,3 +68,11 @@ def _safe_number(value, default=None):
         return default
 
     return value
+
+def safe_float(value):
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None

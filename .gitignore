@@ -29,6 +29,10 @@ venv/
 !portfolios/
 !portfolios/positions.json
 !requirements.txt
+!install.txt
+!licence.txt
+!README.md
+
 
 #portfele
 !portfolios/default.json
@@ -75,3 +79,4 @@ venv/
 #baza danych
 !data/
 !data/stocks_data.db
+!data/create_tables.sqlite.sql

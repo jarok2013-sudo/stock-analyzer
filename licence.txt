@@ -1,0 +1,9 @@
+📜 5. Licencja i Warunki Użytkowania
+Projekt udostępniany jest na zasadach otwartej licencji Copyleft (np. GNU General Public License v3.0 lub Creative Commons BY-SA).
+
+Warunki:
+Wolność użycia i modyfikacji: Masz prawo do dowolnego uruchamiania, analizowania, ulepszania i dostosowywania kodu do własnych potrzeb.
+
+Obowiązek udostępniania źródła (Copyleft): Jeśli zmodyfikujesz ten kod lub wykorzystasz go jako bazę do własnego projektu i będziesz go rozpowszechniać/używać, masz obowiązek udostępnić pełny kod źródłowy publicznie na tej samej licencji.
+
+Brak gwarancji: Oprogramowanie dostarczane jest w stanie takim, jakim jest (AS IS), bez jakichkolwiek gwarancji finansowych lub inwestycyjnych.

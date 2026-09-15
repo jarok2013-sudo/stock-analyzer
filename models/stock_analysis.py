@@ -11,6 +11,7 @@ import config
 from database import save_instrument, should_update, _load_fundamentals_from_db
 from download import get_instrument_info
 from scoring.quality_score import calculate_quality_score
+from scoring.quality_score_cfd import calculate_quality_score_cfd,calculate_confidence_CFD
 from scoring.trend import get_trend
 from scoring.fundamental_score import calculate_fundamental_score, calculate_fundamental_etf_score
 from scoring.analyst_sentiment import calculate_analyst_sentiment
@@ -33,7 +34,7 @@ from utils.supports import (
     find_support_zones,
     rate_supports,
 )
-from utils.func import _bool_value, _safe_number
+from utils.func import _bool_value, _safe_number, safe_float
 from utils.dynamic_levels import calculate_dynamic_levels
 
 
@@ -159,6 +160,7 @@ class StockAnalysis:
 
         #czy etf
         self.is_etf = False
+        self.is_cfd = False
 
 
 
@@ -417,11 +419,17 @@ class StockAnalysis:
         ) = calculate_analyst_sentiment(self)
 
     def calculate_quality_score(self):
-        """Wylicza wyłącznie techniczny Quality Score 0–100."""
-        (
-            self.quality_score,
-            self.quality_reasons
-        ) = calculate_quality_score(self)
+        """Wybiera odpowiednią logikę Quality Score zależnie od typu instrumentu."""
+        if getattr(self, "is_cfd", False):
+            # Wywołanie dedykowanego modułu dla CFD
+            self.quality_score, self.quality_reasons = calculate_quality_score_cfd(self)
+        else:
+            # Klasyczny Quality Score dla akcji / ETF
+            """Wylicza wyłącznie techniczny Quality Score 0–100."""
+            (
+                self.quality_score,
+                self.quality_reasons
+            ) = calculate_quality_score(self)
 
     def calculate_entry_score(self):
         """Wylicza punktację momentu wejścia."""
@@ -524,13 +532,27 @@ class StockAnalysis:
         return self.confidence
 
     def calculate_confidence_ETF(self) -> float:
-        """Wylicza łączny wskaźnik Confidence Index z uwzględnieniem typu instrumentu."""
-    
-        # Dla ETF fundamenty i analitycy są pomijani.
-        # Większą wagę dajemy strukturze trendu i poziomom technicznym.
-        total_score = (self.quality_score * 0.50) + (self.entry_score * 0.50)
+        """Wylicza łączny wskaźnik Confidence Index z uwzględnieniem techniki i fundamentów ETF."""
         
-        return round(total_score, 1)
+        q_score = safe_float(getattr(self, "quality_score", 0)) or 0
+        e_score = safe_float(getattr(self, "entry_score", 0)) or 0
+        f_score = safe_float(getattr(self, "fundamental_score", 0)) or 0
+
+        # Dedykowane wagi: 40% Jakość techniczna, 40% Timing wejścia, 20% Jakość funduszu (AUM/TER)
+        total_score = (q_score * 0.40) + (e_score * 0.40) + (f_score * 0.20)
+        
+        final_confidence = round(total_score, 1)
+        
+        # Zapis do pól instancji dla zachowania spójności
+        self.confidence_score = final_confidence
+        self.confidence_pct = int(final_confidence)
+        
+        return final_confidence
+        #return round(total_score, 1)
+
+    def calculate_confidence_CFD(self):
+        """Metoda instancyjna obliczająca pewność sygnału dla CFD."""
+        return calculate_confidence_CFD(self)
 
     def debug_print_analysis(self):
         """Drukuje podsumowanie kontrolne analizowanego waloru."""
@@ -603,6 +625,7 @@ class StockAnalysis:
 
         print("=" * 50 + "\n")
 
+        
     def run(self):
         """Główna metoda wykonująca pełną analizę w odpowiedniej sekwencji."""
         self.fetch_instrument_info()
@@ -615,6 +638,11 @@ class StockAnalysis:
             self.calculate_fundamental_etf_score()
             self.analyst_sentiment_score = 0
             self.analyst_sentiment_reasons = [{"points": 0, "text": "Instrument ETF — brak ocen analityków"}]
+        elif getattr(self, "is_cfd", False):
+            self.fundamental_score = 0
+            self.fundamental_reasons = [{"points": 0, "text": "Instrument CFD — analiza oparta na technice i kosztach"}]
+            self.analyst_sentiment_score = 0
+            self.analyst_sentiment_reasons = [{"points": 0, "text": "Instrument CFD — brak ocen analityków"}]
         else:
             self.calculate_fundamental_score()
             self.calculate_analyst_sentiment()
@@ -626,6 +654,8 @@ class StockAnalysis:
         self.calculate_signal()
         if self.is_etf:
             self.calculate_confidence_ETF()
+        elif getattr(self, "is_cfd", False):
+            self.calculate_confidence_CFD() # opcjonalny własny kalkulator confidence dla CFD
         else:
             self.calculate_confidence()
         return self
