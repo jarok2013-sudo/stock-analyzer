@@ -39,3 +39,4 @@ typing_extensions
 urllib3 
 websockets 
 yfinance 
+reportlab
