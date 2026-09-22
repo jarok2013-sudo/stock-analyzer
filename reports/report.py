@@ -95,9 +95,14 @@ class Report:
         currency = self.currency
         trade_levels = getattr(analysis, "trade_levels", None) or {}
 
+        # Pobranie ATR
+        atr_val = getattr(analysis, "atr", None)
+
         levels = []
 
-        # 1. TARGETY ANALITYKÓW (z dynamicznym wyróżnieniem statusu)
+        # ==============================================================
+        # 1. TARGETY ANALITYKÓW
+        # ==============================================================
         target_defs = [
             ("targetHighPrice", "🏛️ TARGET MAX (Analitycy)", "MAX"),
             ("targetMeanPrice", "🏛️ TARGET ŚREDNI (Analitycy)", "AVG"),
@@ -108,35 +113,35 @@ class Report:
             t_price = self.info.get(key, None)
             if t_price is not None and t_price > 0:
                 dist_target = ((t_price - price) / price) * 100
-                
-                # Dostosowanie ikony i opisu w zależności od tego, czy target jest powyżej czy poniżej ceny
+
                 if t_price >= price:
                     detail_str = f"Potencjał: +{dist_target:.2f}%"
                     label_str = label_base
                 else:
                     detail_str = f"Cena wyżej o: {abs(dist_target):.2f}%"
-                    label_str = label_base.replace("🏛️", "⚠️")  # Ostrzeżenie: cena wyprzedza target
-
-                levels.append({
-                    "price": t_price,
-                    "label_raw": label_str,
-                    "color": Fore.MAGENTA,
-                    "detail": detail_str,
-                    "type": "TARGET",
-                })
+                    label_str = label_base.replace("🏛️", "⚠️")
+                # Szukamy czy istnieje już poziom o takiej samej cenie
+                existing_level = next((item for item in levels if item["price"] == t_price), None)
+                if existing_level is None:
+                    levels.append({
+                        "price": t_price,
+                        "label_raw": label_str,
+                        "color": Fore.MAGENTA,
+                        "detail": detail_str,
+                        "type": "TARGET",
+                    })
 
         # ==============================================================
-        # 2. OPORY NAD CENĄ (Główny opór + opory pośrednie do TP2)
+        # 2. OPORY NAD CENĄ
         # ==============================================================
-        tp1_val = trade_levels.get("tp1")
         tp2_val = trade_levels.get("tp2")
         rated_resistances = getattr(analysis, "rated_resistances", [])
 
-        # Wyciągamy wszystkie prawidłowe opory znajdujące się ŚCIŚLE NAD ceną
         resistances_above = [
-            r for r in rated_resistances
-            if isinstance(r, dict) 
-            and r.get("price") is not None 
+            r
+            for r in rated_resistances
+            if isinstance(r, dict)
+            and r.get("price") is not None
             and float(r["price"]) > price
         ]
         resistances_above.sort(key=lambda x: float(x["price"]))
@@ -146,8 +151,7 @@ class Report:
             tests = r.get("touches", 1)
             dist = ((r_price - price) / price) * 100
 
-            # Przeszkoda występuje tylko wtedy, gdy opór leży ŚCIŚLE PONIŻEJ celu TP2
-            is_obstacle = (tp2_val is not None and r_price < (tp2_val - 0.01))
+            is_obstacle = tp2_val is not None and r_price < (tp2_val - 0.01)
 
             if is_obstacle:
                 label = f"🔴 OPÓR / PRZESZKODA [do TP2] [{tests}x]"
@@ -165,12 +169,13 @@ class Report:
             })
 
         # ==============================================================
-        # 3. PRZEBITE OPORY / STREFY RE-TESTU (Ściśle POD ceną)
+        # 3. PRZEBITE OPORY / STREFY RE-TESTU
         # ==============================================================
         broken_resistances = [
-            r for r in rated_resistances
-            if isinstance(r, dict) 
-            and r.get("price") is not None 
+            r
+            for r in rated_resistances
+            if isinstance(r, dict)
+            and r.get("price") is not None
             and float(r["price"]) <= price
         ]
 
@@ -178,9 +183,13 @@ class Report:
             last_broken = max(broken_resistances, key=lambda x: float(x["price"]))
             b_price = float(last_broken["price"])
             dist_b = ((price - b_price) / price) * 100
-            
-            supp_price = getattr(analysis, "nearest_support", {}).get("price") if getattr(analysis, "nearest_support", None) else None
-            
+
+            supp_price = (
+                getattr(analysis, "nearest_support", {}).get("price")
+                if getattr(analysis, "nearest_support", None)
+                else None
+            )
+
             if not supp_price or abs(b_price - float(supp_price)) > 0.01:
                 levels.append({
                     "price": b_price,
@@ -207,37 +216,46 @@ class Report:
             })
 
         # ==============================================================
-        # 5. TAKE PROFIT (TP) - scalanie z oporami przy tej samej cenia
+        # 5. TAKE PROFIT (TP)
         # ==============================================================
         for tp_name in ["tp1", "tp2"]:
-            tp_val = trade_levels.get(tp_name) 
+            tp_val = trade_levels.get(tp_name)
             tp_source = trade_levels.get(f"{tp_name}_source", "")
             tp_rr = trade_levels.get(f"rr_{tp_name}", "")
 
             if tp_val is not None:
-                # Szukamy, czy na drabinie jest już opór o tej samej cenie (różnica < 0.01 PLN)
                 matching_res = next(
-                    (lvl for lvl in levels if lvl["type"] == "RESISTANCE" and abs(lvl["price"] - tp_val) < 0.01), 
-                    None
+                    (
+                        lvl
+                        for lvl in levels
+                        if lvl["type"] == "RESISTANCE"
+                        and abs(lvl["price"] - tp_val) < 0.01
+                    ),
+                    None,
                 )
 
                 if matching_res:
-                    # Zamiast ukrywać TP1, doklejamy informację do istniejącego oporu
-                    matching_res["label_raw"] += f" 🎯 [TP: {tp_name.upper()} (RR={tp_rr})]"
+                    matching_res[
+                        "label_raw"
+                    ] += f" 🎯 [TP: {tp_name.upper()} (RR={tp_rr})]"
                     matching_res["color"] = Fore.LIGHTCYAN_EX
                 else:
-                    # Jeśli nie ma kolizji z oporem, dodajemy osobny wiersz TP
                     dist_tp = ((tp_val - price) / price) * 100
                     levels.append({
                         "price": tp_val,
-                        "label_raw": f"🎯 TAKE PROFIT ({tp_name.upper()}) {tp_source} (RR={tp_rr})",
+                        "label_raw": (
+                            f"🎯 TAKE PROFIT ({tp_name.upper()}) {tp_source}"
+                            f" (RR={tp_rr})"
+                        ),
                         "color": Fore.LIGHTCYAN_EX,
                         "detail": f"Zysk: {dist_tp:+.2f}%",
                         "type": "TP",
                     })
 
+        # ==============================================================
         # 6. STOP LOSS (SL)
-        sl_val = _safe_number(self.analysis.trade_levels["stop_loss"])
+        # ==============================================================
+        sl_val = _safe_number(trade_levels.get("stop_loss"))
         if sl_val is not None:
             dist_sl = ((price - sl_val) / price) * 100
             levels.append({
@@ -248,7 +266,9 @@ class Report:
                 "type": "SL",
             })
 
+        # ==============================================================
         # 7. ŚREDNIE EMA
+        # ==============================================================
         for ema_name in ["ema20", "ema50", "ema200"]:
             ema_val = getattr(analysis, ema_name, None)
             if ema_val is not None:
@@ -261,7 +281,96 @@ class Report:
                     "type": "EMA",
                 })
 
-        # 8. AKTUALNA CENA
+        # ==============================================================
+        # 8. POZIOMY BANDER ATR (+1x ATR oraz -1x ATR)
+        # ==============================================================
+        if atr_val is not None and atr_val > 0:
+            atr_upper = price + atr_val
+            atr_lower = price - atr_val
+
+            levels.append({
+                "price": atr_upper,
+                "label_raw": "📐 ATR GÓRA (+1x ATR 1D)",
+                "color": Fore.WHITE,
+                "detail": f"Zasięg (+{((atr_val)/price)*100:.2f}%)",
+                "type": "ATR_BOUND",
+            })
+
+            levels.append({
+                "price": atr_lower,
+                "label_raw": "📐 ATR DÓŁ (-1x ATR 1D)",
+                "color": Fore.WHITE,
+                "detail": f"Zasięg (-{((atr_val)/price)*100:.2f}%)",
+                "type": "ATR_BOUND",
+            })
+
+        # ==============================================================
+        # 9. EKSTREMA 52-TYGODNIOWE (52W High / Low)
+        # ==============================================================
+        h52 = self.info.get("fiftyTwoWeekHigh") or getattr(
+            analysis, "fifty_two_week_high", None
+        )
+        l52 = self.info.get("fiftyTwoWeekLow") or getattr(
+            analysis, "fifty_two_week_low", None
+        )
+
+        if h52 is not None and h52 > 0:
+            dist_h52 = ((h52 - price) / price) * 100
+            levels.append({
+                "price": float(h52),
+                "label_raw": "👑 52W HIGH (Roczny Szczyt)",
+                "color": Fore.LIGHTYELLOW_EX,
+                "detail": f"Odstęp: {dist_h52:+.2f}%",
+                "type": "52W_EXTREME",
+            })
+
+        if l52 is not None and l52 > 0:
+            dist_l52 = ((l52 - price) / price) * 100
+            levels.append({
+                "price": float(l52),
+                "label_raw": "💀 52W LOW (Roczny Dołek)",
+                "color": Fore.LIGHTBLACK_EX,
+                "detail": f"Odstęp: {dist_l52:+.2f}%",
+                "type": "52W_EXTREME",
+            })
+
+        # ==============================================================
+        # 10. POZIOMY FIBONACCIEGO
+        # ==============================================================
+        fibo_levels = getattr(analysis, "fibo_levels", {}) or {}
+        for fib_key in ["38.2", "50.0", "61.8"]:
+            f_price = fibo_levels.get(fib_key) or fibo_levels.get(
+                float(fib_key) / 100
+            )
+            if f_price is not None and f_price > 0:
+                dist_fibo = ((f_price - price) / price) * 100
+                levels.append({
+                    "price": float(f_price),
+                    "label_raw": f"🌀 FIBO {fib_key}%",
+                    "color": Fore.MAGENTA,
+                    "detail": f"Poziom ({dist_fibo:+.2f}%)",
+                    "type": "FIBO",
+                })
+
+        # ==============================================================
+        # 11. VOLUME PROFILE (POC - Point of Control)
+        # ==============================================================
+        poc_val = getattr(analysis, "volume_poc", None) or getattr(
+            analysis, "poc_price", None
+        )
+        if poc_val is not None and poc_val > 0:
+            dist_poc = ((poc_val - price) / price) * 100
+            levels.append({
+                "price": float(poc_val),
+                "label_raw": "🧲 VOLUME POC (Największy Wolumen)",
+                "color": Fore.YELLOW,
+                "detail": f"Magnes ({dist_poc:+.2f}%)",
+                "type": "POC",
+            })
+
+        # ==============================================================
+        # 12. AKTUALNA CENA
+        # ==============================================================
         levels.append({
             "price": price,
             "label_raw": "💲 AKTUALNA CENA",
@@ -270,25 +379,43 @@ class Report:
             "type": "PRICE",
         })
 
-        # Sortowanie poziomów od najpotężniejszego (najwyższa cena) do najniższego
+        # Sortowanie poziomów od najwyższego do najniższego
         levels.sort(key=lambda x: x["price"], reverse=True)
 
+        # Rendering w konsoli
         print("\n" + "=" * 70)
-        print(f" 📊 DRABINA POZIOMÓW CENOWYCH: {analysis.symbol}")
+        atr_header = (
+            f" | ATR(14): {atr_val:.2f} {currency}"
+            if (atr_val and atr_val > 0)
+            else ""
+        )
+        print(
+            f" 📊 DRABINA POZIOMÓW CENOWYCH: {analysis.symbol}{atr_header}"
+        )
         print("=" * 70)
 
         for i, lvl in enumerate(levels):
             p_str = f"{lvl['price']:.2f} {currency}"
-            colored_label = f"{lvl['color']}{lvl['label_raw']:<32}{Style.RESET_ALL}"
-            
+            colored_label = f"{lvl['color']}{lvl['label_raw']:<37}{Style.RESET_ALL}"
+
+            atr_str = ""
+            if atr_val and atr_val > 0 and lvl["type"] != "PRICE":
+                dist_atr = abs(lvl["price"] - price) / atr_val
+                atr_str = f" [{dist_atr:.1f}x ATR]"
+
             if lvl["type"] == "PRICE":
-                print(f" --->  ►► {colored_label} : {p_str:<12} ({lvl['detail']}) ◄◄")
+                print(
+                    f" --->  ►► {colored_label} : {p_str:<12} ({lvl['detail']}) ◄◄"
+                )
             else:
-                print(f"       │  {colored_label} : {p_str:<12} ({lvl['detail']})")
-            
+                print(
+                    f"       │  {colored_label} : {p_str:<12}"
+                    f" ({lvl['detail']}{atr_str})"
+                )
+
             if i < len(levels) - 1:
                 print("       │")
-                
+
         print("=" * 70)
 
     def report_levels(self):

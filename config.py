@@ -50,6 +50,14 @@ MAX_ZONES_ON_CHART = 1
 MEDIUM_ZONE_TESTS = 5
 STRONG_ZONE_TESTS = 8
 
+"""
+    Filtruje opory:
+    1. Ogranicza wiek danych do `max_months` (np. 6 miesięcy).
+    2. Odrzuca szum znajdujący się zbyt daleko od obecnej ceny (np. > 4x ATR).
+"""
+MAX_RES_MONTH = 6
+MAX_ATR_NOISE = 4
+
 
 # =====================
 # Chart 

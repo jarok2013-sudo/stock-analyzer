@@ -3,15 +3,46 @@ from pathlib import Path
 # Dodajemy katalog nadrzędny (../) do ścieżek wyszukiwania modułów Pythona
 parent_dir = Path(__file__).resolve().parent.parent
 import numpy as np
-from config import ZONE_TOLERANCE
+from datetime import datetime, timedelta
+from config import ZONE_TOLERANCE, MAX_RES_MONTH, MAX_ATR_NOISE
 
 
-def find_resistance_zones(maxima, tolerance=ZONE_TOLERANCE):
+def find_resistance_zones(maxima, current_price, atr, tolerance=ZONE_TOLERANCE, 
+        max_atr_noise=MAX_ATR_NOISE,
+        max_res_month=MAX_RES_MONTH,):
+    """
+    Filtrujemy opory:
+    
+    Grupuje maxima w strefy oporów z uwzględnieniem:
+    1. Ograniczenia wieku oporu (max_res_month w miesiącach).
+    2. Ograniczenia odległości cenowej od aktualnego kursu (max_atr_noise * ATR).
+    """
+    # 1. Limit cenowy oporu (nie szukamy oporów wyżej niż cena + X * ATR)
+    max_price_limit = current_price + (max_atr_noise * atr)
+
+    # 2. Limit czasowy (wyliczamy datę graniczną dla obiektów datetime)
+    cutoff_date = datetime.now() - timedelta(days=max_res_month * 30)
+
+    
+
     zones = []
 
     for pkt_max in maxima:
         price = pkt_max["price"]
-        date = pkt_max["date"]
+        date = pkt_max["date"]  # Oczekiwana data (datetime) lub age_in_days (int)
+
+        # --- FILTR 1: Cena wykracza poza zasięg ATR ---
+        if price > max_price_limit or price < current_price:
+            continue
+
+        # --- FILTR 2: Wiek oporu (starszy niż MAX_RES_MONTH) ---
+        if isinstance(date, (datetime, np.datetime64)):
+            if date < cutoff_date:
+                continue
+        elif isinstance(date, (int, float)):
+            # Jeśli 'date' oznacza liczbę dni/świec wstecz (age_in_days)
+            if date > (max_res_month * 21):
+                continue
 
         best_zone = None
         min_distance = float("inf")

@@ -62,6 +62,7 @@ def calculate_trade_levels(analysis, atr_multiplier: float = 0.5):
     # 1. BUFOR ATR
     # ------------------------------------------------------------------
 
+    # 1. Wyznaczenie kwoty bufora (odstępu od wsparcia)
     if atr is not None and not pd.isna(atr) and atr > 0:
         buffer_amount = float(atr) * atr_multiplier
     else:
@@ -71,15 +72,21 @@ def calculate_trade_levels(analysis, atr_multiplier: float = 0.5):
     # 2. STOP LOSS
     # ------------------------------------------------------------------
 
+    # 2. Główna logika Stop Loss
     if (
         support is not None
         and support.get("price") is not None
         and support["price"] < price
     ):
-        stop_loss = float(support["price"]) - buffer_amount
+        raw_sl = float(support["price"]) - buffer_amount
 
+        # Zabezpieczenie: SL nie może być zbyt blisko bieżącej ceny (minimum 1x ATR lub 1.5%)
+        min_distance = (
+            float(atr) if (atr and not pd.isna(atr) and atr > 0) else price * 0.015
+        )
+        stop_loss = min(raw_sl, price - min_distance)
     else:
-        # Fallback, jeżeli nie znaleziono poprawnego wsparcia
+        # Fallback: Brak wsparcia -> ustawiamy SL na 2x bufor pod ceną (min. 2x ATR lub 2%)
         stop_loss = price - (buffer_amount * 2)
 
     # ------------------------------------------------------------------

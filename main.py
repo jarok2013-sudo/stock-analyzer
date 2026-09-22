@@ -11,7 +11,7 @@ from download import fetch_data
 
 from models.stock_analysis import StockAnalysis
 from reports.report import Report
-from reports.report_pdf import generate_pdf_report
+#from reports.report_pdf import generate_pdf_report
 from utils.indicators import add_indicators
 from reports.pdf_generator import generate_pdf_report
 

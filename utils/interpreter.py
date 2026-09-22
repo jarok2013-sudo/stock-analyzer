@@ -94,9 +94,9 @@ def interpret_ema_position(price: float | None, ema_val: float | None, ema_name:
 
     diff_pct = ((price - ema_val) / price) * 100
     if price > ema_val:
-        return f"{ema_name}: {ema_val:.2f} {currency} ➔ POWYŻEJ 🟢 (+{diff_pct:.2f}%)"
+        return f"{ema_name}: {ema_val:.2f} {currency} ➔ Cena POWYŻEJ 🟢 (+{diff_pct:.2f}%)"
     else:
-        return f"{ema_name}: {ema_val:.2f} {currency} ➔ PONIŻEJ 🔴 ({diff_pct:.2f}%)"
+        return f"{ema_name}: {ema_val:.2f} {currency} ➔ Cena PONIŻEJ 🔴 ({diff_pct:.2f}%)"
 
 
 def interpret_distance(dist: float | None, is_support: bool = True) -> str:

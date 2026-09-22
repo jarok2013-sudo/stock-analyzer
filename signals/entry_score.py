@@ -110,10 +110,23 @@ def score_entry_rr(analysis):
     reasons = []
 
     trade_levels = getattr(analysis, "trade_levels", {}) or {}
+    rr1 = _safe_number(trade_levels.get("rr_tp1"))
     rr = _safe_number(trade_levels.get("rr_tp2"))
     min_rr = getattr(config, "MIN_RR", 2.0)
     max_points = getattr(config, "ENTRY_POINTS_RR", 35)
 
+    # 1. WALIDACJA WĄSKIEGO GARDŁA (TP1 / Opór zbyt blisko)
+    # Jeśli opór do TP1 daje RR < 0.5, traktujemy to jako wysokie ryzyko tuż pod oporem
+    if rr1 is not None and rr1 < 0.5:
+        add_reason(
+            reasons,
+            "Risk/Reward TP1",
+            0,
+            f"Krytycznie niski RR dla TP1 (opór zbyt blisko: {rr1:.2f})",
+        )
+        return 0, reasons
+
+    # 2. PUNKTACJA DLA TP2 (gdy droga przez TP1 jest akceptowalna)
     if rr is None:
         add_reason(reasons, "Risk/Reward", 0, "Brak możliwości wyliczenia R/R.")
         return 0, reasons
@@ -133,6 +146,14 @@ def score_entry_rr(analysis):
             0,
             f"R/R zbyt niskie ({rr:.2f} < {min_rr:.2f})",
         )
+        # Kara za kupowanie bezpośrednio pod oporem (wąskie gardło TP1)
+    elif rr1 < 0.5:
+            add_reason(
+                reasons,
+                "Risk/Reward TP1",
+                0,
+                f"Krytycznie niski RR dla TP1 (opór zbyt blisko) ({rr1:.2f} < {min_rr:.2f})",
+            )
 
     else:
         add_reason(reasons, "Risk/Reward", 0, "Nieprawidłowy profil R/R.")

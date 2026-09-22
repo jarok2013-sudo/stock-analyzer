@@ -146,6 +146,8 @@ def generate_pdf_report(analysis, filename=None):
     COLOR_RED = colors.HexColor("#dc2626")
     COLOR_PRICE = colors.HexColor("#2563eb")
     COLOR_TARGET = colors.HexColor("#e616f9")
+    COLOR_FIBO = colors.HexColor("#7c3aed")
+    COLOR_52W = colors.HexColor("#d97706")  # Kolor bursztynowy / złoty dla 52W High/Low
 
     title_style = ParagraphStyle(
         "HeaderTitle", parent=styles["Heading1"], fontName=FONT_BOLD, fontSize=14, textColor=colors.whitesmoke, alignment=1
@@ -284,7 +286,7 @@ def generate_pdf_report(analysis, filename=None):
         story.append(Spacer(1, 4))
 
     # -------------------------------------------------------------------------
-    # DYNAMICZNA DRABINA POZIOMÓW CENOWYCH
+    # DYNAMICZNA DRABINA POZIOMÓW CENOWYCH (Z FIBO ORAZ 52W HIGH / LOW)
     # -------------------------------------------------------------------------
     story.append(Paragraph("<b>DRABINA POZIOMÓW CENOWYCH</b>", section_title))
     price = getattr(analysis, "price", 0.0)
@@ -311,13 +313,36 @@ def generate_pdf_report(analysis, filename=None):
                     label_str = label_base.replace("🏛️", "⚠️")
 
                 levels.append({
-                    "price": t_price,
+                    "price": float(t_price),
                     "label": label_str,
                     "detail": detail_str,
                     "type": "TARGET",
                 })
 
-    # 2. OPORY NAD CENĄ
+    # 2. EXTREMA 52-TYGODNIOWE (52W HIGH / 52W LOW)
+    high_52 = info.get("fiftyTwoWeekHigh")
+    if high_52 is not None and float(high_52) > 0:
+        h52_p = float(high_52)
+        dist_h52 = ((h52_p - price) / price) * 100
+        levels.append({
+            "price": h52_p,
+            "label": "👑 52W HIGH (Roczny Szczyt)",
+            "detail": f"Odstęp: {dist_h52:+.2f}%",
+            "type": "52W",
+        })
+
+    low_52 = info.get("fiftyTwoWeekLow")
+    if low_52 is not None and float(low_52) > 0:
+        l52_p = float(low_52)
+        dist_l52 = ((l52_p - price) / price) * 100
+        levels.append({
+            "price": l52_p,
+            "label": "📉 52W LOW (Roczny Dołek)",
+            "detail": f"Odstęp: {dist_l52:+.2f}%",
+            "type": "52W",
+        })
+
+    # 3. OPORY NAD CENĄ
     tp2_val = trade_levels.get("tp2")
     rated_resistances = getattr(analysis, "rated_resistances", [])
 
@@ -325,7 +350,6 @@ def generate_pdf_report(analysis, filename=None):
         r for r in rated_resistances
         if isinstance(r, dict) and r.get("price") is not None and float(r["price"]) > price
     ]
-    # POPRAWKA SYNTAX ERROR (lambda x:)
     resistances_above.sort(key=lambda x: float(x["price"]))
 
     for r in resistances_above:
@@ -346,7 +370,7 @@ def generate_pdf_report(analysis, filename=None):
             "type": "RES",
         })
 
-    # 3. PRZEBITE OPORY / STREFY RE-TESTU (FLIP SUPPORT)
+    # 4. PRZEBITE OPORY / STREFY RE-TESTU (FLIP SUPPORT)
     broken_resistances = [
         r for r in rated_resistances
         if isinstance(r, dict) and r.get("price") is not None and float(r["price"]) <= price
@@ -366,10 +390,10 @@ def generate_pdf_report(analysis, filename=None):
                 "type": "SUP_FLIP",
             })
 
-    # 4. GŁÓWNE WSPARCIE
+    # 5. GŁÓWNE WSPARCIE
     supp = getattr(analysis, "nearest_support", None)
     if supp and supp.get("price"):
-        sup_p = supp["price"]
+        sup_p = float(supp["price"])
         tests = supp.get("touches", 1)
         dist = getattr(analysis, "support_distance", 0) or 0
         levels.append({
@@ -379,53 +403,68 @@ def generate_pdf_report(analysis, filename=None):
             "type": "SUP",
         })
 
-    # 5. TAKE PROFIT (TP1 & TP2)
+    # 6. TAKE PROFIT (TP1 & TP2)
     for tp_name in ["tp1", "tp2"]:
         tp_val = trade_levels.get(tp_name)
         tp_rr = trade_levels.get(f"rr_{tp_name}", "")
 
         if tp_val is not None:
+            tp_val_f = float(tp_val)
             matching_res = next(
-                (lvl for lvl in levels if lvl["type"] == "RES" and abs(lvl["price"] - tp_val) < 0.01),
+                (lvl for lvl in levels if lvl["type"] == "RES" and abs(lvl["price"] - tp_val_f) < 0.01),
                 None
             )
             if matching_res:
                 matching_res["label"] += f" 🎯 [TP: {tp_name.upper()} (RR={tp_rr})]"
             else:
-                dist_tp = ((tp_val - price) / price) * 100
+                dist_tp = ((tp_val_f - price) / price) * 100
                 levels.append({
-                    "price": tp_val,
+                    "price": tp_val_f,
                     "label": f"🎯 TAKE PROFIT ({tp_name.upper()}) (RR={tp_rr})",
                     "detail": f"Zysk: {dist_tp:+.2f}%",
                     "type": "TP",
                 })
 
-    # 6. STOP LOSS (SL)
+    # 7. STOP LOSS (SL)
     sl_val = _safe_number(trade_levels.get("stop_loss"))
     if sl_val is not None:
         dist_sl = ((price - sl_val) / price) * 100
         levels.append({
-            "price": sl_val,
+            "price": float(sl_val),
             "label": "🛑 STOP LOSS (SL)",
             "detail": f"Ryzyko: -{dist_sl:.2f}%",
             "type": "SL",
         })
 
-    # 7. ŚREDNIE EMA
+    # 8. ŚREDNIE EMA
     for ema_name in ["ema20", "ema50", "ema200"]:
         ema_val = getattr(analysis, ema_name, None)
         if ema_val is not None:
-            dist_ema = ((ema_val - price) / price) * 100
+            ema_val_f = float(ema_val)
+            dist_ema = ((ema_val_f - price) / price) * 100
             levels.append({
-                "price": ema_val,
+                "price": ema_val_f,
                 "label": f"🔷 {ema_name.upper()}",
                 "detail": f"Średnia ({dist_ema:+.2f}%)",
                 "type": "EMA",
             })
 
-    # 8. AKTUALNA CENA
+    # 9. POZIOMY FIBONACCIEGO
+    fibo_dict = getattr(analysis, "fibo_levels", {}) or {}
+    for ratio_key, fibo_p in fibo_dict.items():
+        if fibo_p is not None and float(fibo_p) > 0:
+            f_price = float(fibo_p)
+            dist_fibo = ((f_price - price) / price) * 100
+            levels.append({
+                "price": f_price,
+                "label": f"🌀 FIBO {ratio_key}%",
+                "detail": f"Zniesienie ({dist_fibo:+.2f}%)",
+                "type": "FIBO",
+            })
+
+    # 10. AKTUALNA CENA
     levels.append({
-        "price": price,
+        "price": float(price),
         "label": "💲 AKTUALNA CENA",
         "detail": "Rynkowa",
         "type": "PRICE",
@@ -441,6 +480,8 @@ def generate_pdf_report(analysis, filename=None):
         "SUP_FLIP": COLOR_GREEN,
         "TP": COLOR_GREEN,
         "TARGET": COLOR_TARGET,
+        "FIBO": COLOR_FIBO,
+        "52W": COLOR_52W,
     }
 
     ladder_table_data = []

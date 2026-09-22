@@ -145,3 +145,30 @@ def find_local_minmax_vectorized(df, window_size=2):
             })
 
     return results
+
+# def calculate_fibo_levels(
+#     swing_high: float, swing_low: float, trend: str = "UP"
+# ) -> dict:
+#     """Wylicza poziomy zniesień Fibonacciego dla podanej fali cenowej.
+
+#     :param swing_high: Maksimum wybranej fali
+#     :param swing_low: Minimum wybranej fali
+#     :param trend: "UP" (korekta spada od szczytu) lub "DOWN" (odbicie rośnie od
+#     dołka)
+#     :return: Słownik w formacie {'38.2': cena, '50.0': cena, '61.8': cena, ...}
+#     """
+#     if not swing_high or not swing_low or swing_high <= swing_low:
+#         return {}
+
+#     diff = swing_high - swing_low
+#     ratios = [0.236, 0.382, 0.500, 0.618, 0.786]
+#     fibo_dict = {}
+
+#     if trend.upper() == "UP":
+#         for r in ratios:
+#             fibo_dict[f"{r*100:.1f}"] = round(swing_high - (diff * r), 2)
+#     else:
+#         for r in ratios:
+#             fibo_dict[f"{r*100:.1f}"] = round(swing_low + (diff * r), 2)
+
+#     return fibo_dict

@@ -99,12 +99,13 @@ class StockAnalysis:
         self.obv_bullish_div = False
         self.obv_bearish_div = False
 
-        # Geometria rynku / Szczyty
+        # Geometria rynku / Szczyty / Fibo
         self.high_20d = None
         self.low_20d = None
         self.ath = None
         self.dist_to_ath_pct = None
         self.is_near_ath = False
+        self.fibo_levels = {}  # <--- DODANY SŁOWNIK POZIOMÓW FIBO
 
         self.minima = []
         self.maxima = []
@@ -355,7 +356,9 @@ class StockAnalysis:
         # ==========================================================
 
         self.resistance_zones = find_resistance_zones(
-            self.maxima
+            self.maxima,
+            self.price,
+            self.atr
         )
 
         self.rated_resistances = rate_resistances(
@@ -625,6 +628,63 @@ class StockAnalysis:
 
         print("=" * 50 + "\n")
 
+    def calculate_fibo_levels(self, lookback: int = 50):
+        """Wyznacza poziomy zniesień oraz rozszerzeń Fibonacciego (Fibo Extensions)."""
+        if self.df is None or len(self.df) < lookback:
+            self.fibo_levels = {}
+            return
+
+        # Pobranie wycinka danych
+        recent_df = self.df.tail(lookback)
+
+        # Indeksy świec ze szczytem i dołkiem
+        high_idx = recent_df["high"].idxmax()
+        low_idx = recent_df["low"].idxmin()
+
+        swing_high = float(recent_df.loc[high_idx, "high"])
+        swing_low = float(recent_df.loc[low_idx, "low"])
+
+        # Określenie kierunku fali
+        current_trend = getattr(self, "trend", "BOCZNY")
+        trend_str = str(current_trend).upper()
+        is_uptrend = any(kw in trend_str for kw in ["WZROST", "UP", "STRONG_UP", "BULL"])
+
+        diff = swing_high - swing_low
+        if diff <= 0:
+            self.fibo_levels = {}
+            return
+
+        fibo_dict = {}
+
+        # 1. Standardowe zniesienia wewnętrzne (Retracements)
+        ratios = [0.236, 0.382, 0.500, 0.618, 0.786]
+
+        if is_uptrend:
+            for r in ratios:
+                fibo_dict[f"{r*100:.1f}"] = round(swing_high - (diff * r), 2)
+        else:
+            for r in ratios:
+                fibo_dict[f"{r*100:.1f}"] = round(swing_low + (diff * r), 2)
+
+        # 2. Dynamiczne Rozszerzenia (Extensions: 127.2% oraz 161.8%)
+        current_price = float(recent_df["close"].iloc[-1])
+
+        # Jeśli w trendzie wzrostowym cena przebywa przy szczycie lub go wybiła
+        if is_uptrend and current_price >= (swing_high - (0.5 * getattr(self, "atr", 1.0))):
+
+            # Szukamy dołka korekcyjnego C (najniższy punkt między szczytem a obecną świecą)
+            if high_idx < recent_df.index[-1]:
+                after_high_df = recent_df.loc[high_idx:]
+                correction_low = float(after_high_df["low"].min())
+            else:
+                correction_low = swing_low
+
+            # Mierzenie od punktu C (lub od dołka fali, jeśli C nie występuje)
+            fibo_dict["EXT_127.2"] = round(correction_low + (diff * 1.272), 2)
+            fibo_dict["EXT_161.8"] = round(correction_low + (diff * 1.618), 2)
+
+        self.fibo_levels = fibo_dict
+
         
     def run(self):
         """Główna metoda wykonująca pełną analizę w odpowiedniej sekwencji."""
@@ -632,6 +692,7 @@ class StockAnalysis:
         self.calculate_trend()
         self.calculate_indicators()
         self.calculate_levels()
+        self.calculate_fibo_levels()  # <--- WYWOŁANIE KALKULACJI FIBO
         
         # Prawidłowa kolejność: najpierw wczytanie fundamentów, potem łączny jakość
         if self.is_etf:

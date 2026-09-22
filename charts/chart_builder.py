@@ -4,6 +4,8 @@ import io
 import numpy as np
 import pandas as pd
 
+import matplotlib
+matplotlib.use('TkAgg')  # Zmiana backendu na interaktywny Tkinter
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import mplfinance as mpf
