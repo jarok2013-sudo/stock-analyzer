@@ -19,7 +19,7 @@ multitasking
 numpy 
 packaging 
 pandas
-pandas_ta 
+pandas-ta 
 peewee 
 pillow 
 platformdirs 
