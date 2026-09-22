@@ -18,7 +18,8 @@ mplfinance
 multitasking 
 numpy 
 packaging 
-pandas 
+pandas
+pandas_ta 
 peewee 
 pillow 
 platformdirs 
