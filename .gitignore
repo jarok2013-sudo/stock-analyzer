@@ -19,6 +19,7 @@ venv/
 !download.py
 !main.py
 !scanner.py
+!scanner_zbiorczy.py
 
 
 !models/

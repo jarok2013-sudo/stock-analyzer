@@ -89,6 +89,13 @@ Po aktywacji środowiska `venv` możesz od razu uruchomić główny analizator r
 python main.py
 
 ```
+Do szybszej analizy
+Skanowanei wszystkich portfeli
+
+```bash
+python scanner_zbiorczy.py
+
+```
 
 ---
 
